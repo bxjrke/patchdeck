@@ -32,3 +32,20 @@ def test_service_crud() -> None:
     assert status_response.status_code == 200
     assert status_response.json()[0]["state"] == "configured"
 
+
+def test_settings_roundtrip() -> None:
+    payload = {
+        "update_interval_minutes": 30,
+        "mqtt_enabled": True,
+        "mqtt_discovery_prefix": "homeassistant",
+        "mqtt_base_topic": "patchdeck",
+        "docker_auto_import_enabled": False,
+        "theme": "dark",
+    }
+
+    put_response = client.put("/api/settings", json=payload)
+    assert put_response.status_code == 200
+
+    get_response = client.get("/api/settings")
+    assert get_response.status_code == 200
+    assert get_response.json()["theme"] == "dark"

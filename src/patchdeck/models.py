@@ -27,6 +27,17 @@ class ServiceConfig(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DockerImportCandidate(BaseModel):
+    id: str
+    name: str
+    image: str
+    state: str
+    compose_project: str | None = None
+    compose_service: str | None = None
+    already_configured: bool = False
+    suggested_service: ServiceConfig
+
+
 class Settings(BaseModel):
     update_interval_minutes: int = Field(default=60, ge=1, le=10080)
     mqtt_enabled: bool = False
@@ -42,4 +53,3 @@ class ServiceStatus(BaseModel):
     latest_version: str | None = None
     update_available: bool = False
     state: str = "unknown"
-

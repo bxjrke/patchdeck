@@ -1,0 +1,15 @@
+services:
+  patchdeck:
+    build: ..
+    container_name: patchdeck
+    restart: unless-stopped
+    environment:
+      PATCHDECK_DATA_DIR: /data
+    volumes:
+      - patchdeck-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "8000:8000"
+
+volumes:
+  patchdeck-data:

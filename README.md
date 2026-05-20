@@ -51,8 +51,14 @@ Each adapter should support the same rough lifecycle:
 
 ## Development
 
-This repository currently contains the first minimal backend skeleton. The
-existing homeserver proof-of-concept lives outside this repo and should be
+This repository currently contains an early MVP:
+
+- FastAPI backend
+- file-backed settings and service configuration
+- Docker API import candidates through the local Docker socket
+- a simple built-in web UI for service/settings edits and Docker scans
+
+The existing homeserver proof-of-concept lives outside this repo and should be
 ported gradually, not dumped in wholesale with local paths and secrets.
 
 ```bash
@@ -63,4 +69,3 @@ uvicorn patchdeck.main:app --reload
 ```
 
 Open: http://127.0.0.1:8000
-
