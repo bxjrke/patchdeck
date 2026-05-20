@@ -12,6 +12,16 @@ def test_healthz() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_html_pages() -> None:
+    index_response = client.get("/")
+    settings_response = client.get("/settings")
+
+    assert index_response.status_code == 200
+    assert "Docker Import" in index_response.text
+    assert settings_response.status_code == 200
+    assert "Update-Intervall Minuten" in settings_response.text
+
+
 def test_service_crud() -> None:
     payload = {
         "id": "homeassistant",
