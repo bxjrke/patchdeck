@@ -17,9 +17,11 @@ def test_html_pages() -> None:
     settings_response = client.get("/settings")
 
     assert index_response.status_code == 200
-    assert "Docker Import" in index_response.text
+    assert "Docker Import" not in index_response.text
     assert settings_response.status_code == 200
-    assert "Update-Intervall Minuten" in settings_response.text
+    assert "Update-Check-Intervall Minuten" in settings_response.text
+    assert "Docker Import" in settings_response.text
+    assert "Keine Auto-Updates" in settings_response.text
 
 
 def test_service_crud() -> None:
