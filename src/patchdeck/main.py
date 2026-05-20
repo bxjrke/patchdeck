@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .docker_import import list_container_candidates
 from .models import DockerImportCandidate, ServiceConfig, ServiceStatus, Settings
 from .store import JsonStore
 
 app = FastAPI(title="Patchdeck", version="0.1.0")
+app.mount("/static", StaticFiles(packages=[("patchdeck", "static")]), name="static")
 store = JsonStore()
 
 
@@ -88,6 +90,7 @@ def import_docker_candidate(candidate_id: str) -> ServiceConfig:
 def page_html(active: str) -> str:
     boot = "loadHome();" if active == "home" else "loadSettingsPage();"
     content = HOME_VIEW if active == "home" else SETTINGS_VIEW
+    script = COMMON_JS + (HOME_JS if active == "home" else SETTINGS_JS)
     return f'''<!doctype html>
 <html lang="de">
 <head>
@@ -103,7 +106,7 @@ def page_html(active: str) -> str:
         <p class="eyebrow">Homelab Update Control</p>
         <a class="title-link" href="/" aria-label="Patchdeck Hauptseite"><h1>Patchdeck</h1></a>
       </div>
-      <a class="settings-link" href="/settings" aria-label="Einstellungen" title="Einstellungen">⚙</a>
+      <a class="settings-link" href="/settings" aria-label="Einstellungen" title="Einstellungen"><img src="/static/settings.svg" alt=""></a>
       <div class="summary">
         <span id="summary-services">0 Dienste</span>
         <span id="summary-state">Bereit</span>
@@ -114,7 +117,7 @@ def page_html(active: str) -> str:
 
     <footer>Testversion. Keine Auto-Updates. Update-Ausführung wird später gezielt pro geeignetem Dienst geplant.</footer>
   </main>
-  <script>{JS}
+  <script>{script}
   {boot}
   </script>
 </body>
@@ -172,7 +175,7 @@ SETTINGS_VIEW = '''
           <label><span>ID</span><input id="service-id" placeholder="homeassistant"></label>
           <label><span>Name</span><input id="service-name" placeholder="Home Assistant"></label>
           <label><span>Aktiv</span><select id="service-enabled"><option value="true">true</option><option value="false">false</option></select></label>
-          <label><span>Policy</span><select id="service-policy"><option>manual</option><option>disabled</option></select></label>
+          <label><span>Manuelle Update-Aktion anzeigen</span><select id="service-update-action"><option value="false">false</option><option value="true">true</option></select></label>
           <label><span>Container</span><input id="service-container" placeholder="homeassistant"></label>
           <label><span>Image</span><input id="service-image" placeholder="ghcr.io/example/app:latest"></label>
         </div>
@@ -205,7 +208,8 @@ body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMa
 h1 { margin:0; font-size:clamp(34px,5vw,54px); letter-spacing:0; }
 h2 { margin:0; font-size:22px; letter-spacing:0; overflow-wrap:anywhere; }
 p { margin:6px 0 0; color:var(--muted); }
-.settings-link { position:absolute; top:50%; right:0; transform:translateY(-50%); width:46px; height:46px; display:grid; place-items:center; border-radius:50%; color:#dbeafe; background:#0b1222aa; border:1px solid var(--line); text-decoration:none; font-size:22px; box-shadow:0 8px 30px #0004; }
+.settings-link { position:absolute; top:50%; right:0; transform:translateY(-50%); width:46px; height:46px; display:grid; place-items:center; border-radius:50%; color:#dbeafe; background:#0b1222aa; border:1px solid var(--line); text-decoration:none; box-shadow:0 8px 30px #0004; }
+.settings-link img { width:22px; height:22px; display:block; }
 .settings-link:hover { filter:brightness(1.12); }
 .summary { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
 .summary span { display:inline-flex; margin:0; padding:7px 10px; border:1px solid var(--line); border-radius:999px; background:#0b1222aa; color:var(--muted); font-weight:800; font-size:12px; }
@@ -238,6 +242,11 @@ label { display:grid; gap:5px; color:var(--muted); font-size:13px; }
 .import-list { margin-top:14px; }
 .candidate { display:grid; grid-template-columns:minmax(170px,1fr) minmax(220px,1.2fr) minmax(130px,.7fr) auto; gap:10px; align-items:center; border-top:1px solid var(--line); padding:12px 0; }
 .candidate:first-child { border-top:0; }
+details { margin-top:10px; color:var(--muted); }
+details summary { cursor:pointer; font-size:12px; font-weight:800; }
+.link { color:#bae6fd; text-decoration:none; font-weight:800; }
+.link:hover { text-decoration:underline; }
+.last-run { background:#0b1222aa; border:1px solid #24344d; border-radius:14px; padding:12px; margin-top:12px; }
 details.service-config { background:#0b1222aa; border:1px solid #24344d; border-radius:16px; padding:0; overflow:hidden; }
 details.service-config summary { cursor:pointer; list-style:none; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 details.service-config summary::-webkit-details-marker { display:none; }
@@ -258,7 +267,7 @@ footer { color:#718096; margin-top:22px; font-size:12px; }
 '''
 
 
-JS = r'''
+COMMON_JS = r'''
 const api = (path, options = {}) => fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
 const text = value => String(value ?? '');
 const esc = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -268,7 +277,10 @@ async function getServices() {
   document.querySelector('#summary-services').textContent = services.length + (services.length === 1 ? ' Dienst' : ' Dienste');
   return services;
 }
+'''
 
+
+HOME_JS = r'''
 async function loadHome() {
   const services = await getServices();
   renderServiceCards(services);
@@ -276,12 +288,19 @@ async function loadHome() {
 
 function serviceInfo(service) {
   const metadata = service.metadata || {};
+  const current = metadata.current_version || metadata.installed_version || 'Noch nicht geprüft';
+  const latest = metadata.latest_version || 'Noch nicht geprüft';
+  const updateAvailable = Boolean(metadata.update_available) && current !== latest;
   return {
     container: metadata.container || service.id,
     image: metadata.image || '—',
-    status: service.enabled ? 'Konfiguriert' : 'Deaktiviert',
-    current: metadata.current_version || 'Noch nicht geprüft',
-    latest: metadata.latest_version || 'Noch nicht geprüft'
+    state: service.enabled ? (metadata.state || 'Konfiguriert') : 'Deaktiviert',
+    current,
+    latest,
+    updateAvailable,
+    releaseNotesUrl: metadata.release_notes_url || '',
+    updateActionEnabled: Boolean(metadata.update_action_enabled),
+    lastRun: metadata.last_run || null
   };
 }
 
@@ -294,24 +313,37 @@ function renderServiceCards(services) {
   }
   target.innerHTML = services.map(service => {
     const info = serviceInfo(service);
-    const badgeClass = service.enabled ? 'ok' : 'warn';
-    const badgeText = service.enabled ? 'Aktuell' : 'Deaktiviert';
-    return '<section class="card">' +
+    const incomplete = !info.latest || info.latest === 'Noch nicht geprüft';
+    const badgeClass = !service.enabled || incomplete ? 'warn' : (info.updateAvailable ? 'update' : 'ok');
+    const badgeText = !service.enabled ? 'Deaktiviert' : (incomplete ? 'Unvollständig' : (info.updateAvailable ? 'Update verfügbar' : 'Aktuell'));
+    const releaseLink = info.releaseNotesUrl ? '<a class="link" href="' + esc(info.releaseNotesUrl) + '" target="_blank" rel="noreferrer">Release Notes</a>' : '';
+    const action = info.updateActionEnabled
+      ? '<button type="button" disabled data-idle-label="Update starten">Update noch nicht implementiert</button>'
+      : '<a class="link" href="/settings">Konfigurieren</a>';
+    const lastRun = info.lastRun
+      ? '<div class="last-run"><span>Letztes Update</span><strong>' + esc(info.lastRun) + '</strong></div>'
+      : '';
+    return '<section class="card" data-service="' + esc(service.id) + '">' +
       '<div class="card-head">' +
         '<div class="identity"><div class="logo placeholder" aria-hidden="true">~</div><h2>' + esc(service.name) + '</h2></div>' +
         '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>' +
       '<div class="grid">' +
         '<div><span>Container</span><strong>' + esc(info.container) + '</strong></div>' +
-        '<div><span>Status</span><strong>' + esc(info.status) + '</strong></div>' +
+        '<div><span>Status</span><strong data-role="container-state">' + esc(info.state) + '</strong></div>' +
         '<div><span>Installiert</span><strong>' + esc(info.current) + '</strong></div>' +
         '<div><span>Verfügbar</span><strong>' + esc(info.latest) + '</strong></div>' +
       '</div>' +
-      '<code>' + esc(info.image) + '</code>' +
+      '<details><summary>Image</summary><code>' + esc(info.image) + '</code></details>' +
+      '<div class="actions">' + action + releaseLink + '</div>' +
+      lastRun +
     '</section>';
   }).join('');
 }
+'''
 
+
+SETTINGS_JS = r'''
 async function loadSettingsPage() {
   await Promise.all([loadSettings(), loadServiceSettings()]);
 }
@@ -359,7 +391,7 @@ function serviceDetails(service) {
       '<div class="grid settings-grid">' +
         '<label><span>Name</span><input id="edit-name-' + esc(service.id) + '" value="' + esc(service.name) + '"></label>' +
         '<label><span>Aktiv</span><select id="edit-enabled-' + esc(service.id) + '"><option value="true"' + selected(service.enabled, true) + '>true</option><option value="false"' + selected(service.enabled, false) + '>false</option></select></label>' +
-        '<label><span>Policy</span><select id="edit-policy-' + esc(service.id) + '"><option value="manual"' + selected(service.update_policy, 'manual') + '>manual</option><option value="disabled"' + selected(service.update_policy, 'disabled') + '>disabled</option></select></label>' +
+        '<label><span>Manuelle Update-Aktion anzeigen</span><select id="edit-update-action-' + esc(service.id) + '"><option value="false"' + selected(Boolean(metadata.update_action_enabled), false) + '>false</option><option value="true"' + selected(Boolean(metadata.update_action_enabled), true) + '>true</option></select></label>' +
         '<label><span>Container</span><input id="edit-container-' + esc(service.id) + '" value="' + esc(metadata.container || '') + '"></label>' +
         '<label><span>Image</span><input id="edit-image-' + esc(service.id) + '" value="' + esc(metadata.image || '') + '"></label>' +
         '<label><span>Compose Projekt</span><input id="edit-compose-project-' + esc(service.id) + '" value="' + esc(metadata.compose_project || '') + '"></label>' +
@@ -383,12 +415,13 @@ function readServicePayload(id, prefix, existingId) {
     name: document.querySelector(prefix + 'name-' + id).value.trim(),
     adapter: 'docker',
     enabled: document.querySelector(prefix + 'enabled-' + id).value === 'true',
-    update_policy: document.querySelector(prefix + 'policy-' + id).value,
+    update_policy: document.querySelector(prefix + 'update-action-' + id).value === 'true' ? 'manual' : 'disabled',
     metadata: {
       container: document.querySelector(prefix + 'container-' + id).value.trim(),
       image: document.querySelector(prefix + 'image-' + id).value.trim(),
       compose_project: document.querySelector(prefix + 'compose-project-' + id)?.value.trim() || '',
-      compose_service: document.querySelector(prefix + 'compose-service-' + id)?.value.trim() || ''
+      compose_service: document.querySelector(prefix + 'compose-service-' + id)?.value.trim() || '',
+      update_action_enabled: document.querySelector(prefix + 'update-action-' + id).value === 'true'
     }
   };
 }
@@ -406,10 +439,11 @@ async function createService() {
     name: document.querySelector('#service-name').value.trim(),
     adapter: 'docker',
     enabled: document.querySelector('#service-enabled').value === 'true',
-    update_policy: document.querySelector('#service-policy').value,
+    update_policy: document.querySelector('#service-update-action').value === 'true' ? 'manual' : 'disabled',
     metadata: {
       container: document.querySelector('#service-container').value.trim(),
-      image: document.querySelector('#service-image').value.trim()
+      image: document.querySelector('#service-image').value.trim(),
+      update_action_enabled: document.querySelector('#service-update-action').value === 'true'
     }
   };
   await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});

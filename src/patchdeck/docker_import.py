@@ -81,12 +81,13 @@ def list_container_candidates(configured_ids: set[str], socket_path: str = DOCKE
             name=(compose_service or name).replace("-", " ").replace("_", " ").title(),
             adapter=AdapterKind.DOCKER,
             enabled=True,
-            update_policy=UpdatePolicy.MANUAL,
+            update_policy=UpdatePolicy.DISABLED,
             metadata={
                 "container": name,
                 "image": image,
                 "compose_project": compose_project,
                 "compose_service": compose_service,
+                "update_action_enabled": False,
             },
         )
         candidates.append(

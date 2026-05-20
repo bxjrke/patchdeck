@@ -22,6 +22,15 @@ def test_html_pages() -> None:
     assert "Update-Check-Intervall Minuten" in settings_response.text
     assert "Docker Import" in settings_response.text
     assert "Keine Auto-Updates" in settings_response.text
+    assert "service-policy" not in settings_response.text
+    assert "/static/settings.svg" in settings_response.text
+
+
+def test_settings_icon() -> None:
+    response = client.get("/static/settings.svg")
+
+    assert response.status_code == 200
+    assert "image/svg+xml" in response.headers["content-type"]
 
 
 def test_service_crud() -> None:
