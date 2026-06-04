@@ -11,7 +11,7 @@ from .docker_import import list_container_candidates, service_from_container
 from .icon_cache import cache_service_icon
 from .models import DockerImportCandidate, ServiceConfig, ServiceStatus, Settings
 from .store import JsonStore
-from .update_engine import UpdateEngine, service_update_enabled
+from .update_engine import UpdateEngine, mqtt_enabled, service_update_enabled
 
 store = JsonStore()
 engine = UpdateEngine(store)
@@ -49,7 +49,12 @@ def get_settings() -> Settings:
 
 @app.put("/api/settings")
 def put_settings(settings: Settings) -> Settings:
-    return store.update_settings(settings)
+    previous = engine.effective_settings()
+    updated = store.update_settings(settings)
+    current = engine.effective_settings()
+    if mqtt_enabled(previous) and not mqtt_enabled(current):
+        engine.clear_mqtt_entities(previous)
+    return updated
 
 
 @app.get("/api/services")
@@ -194,7 +199,7 @@ def page_html(active: str) -> str:
 
     {content}
 
-    <footer><span data-i18n="footer">Preview build. Updates run only when triggered for a configured service.</span> <span>Version {__version__}</span></footer>
+    <footer class="footer"><span data-i18n="footer">Preview build. Updates run only when triggered for a configured service.</span><span class="version" aria-label="Patchdeck version">Patchdeck {__version__}</span></footer>
   </main>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script>{script}
@@ -306,11 +311,11 @@ SETTINGS_VIEW = '''
 
 
 CSS = r'''
-:root { color-scheme: dark; --bg:#0f172a; --panel:#111c31; --panel2:#15233b; --field:#0b1222aa; --text:#e5edf7; --muted:#9fb0c8; --line:#263750; --purple:#8b5cf6; --blue:#2563eb; --danger:#b42318; --icon-tile:#0b1222aa; --icon-accent:#7dd3fc; }
-html[data-theme="light"] { color-scheme: light; --bg:#f6f8fb; --panel:#ffffff; --panel2:#f2f6fb; --field:#ffffff; --text:#132033; --muted:#5d6d82; --line:#d7e0ec; --purple:#6d3fdc; --blue:#155bd5; --danger:#b42318; --icon-tile:#ffffff; --icon-accent:#155bd5; }
+:root { color-scheme: dark; --bg:#0f172a; --panel:#111c31; --panel2:#15233b; --field:#0b1222aa; --text:#e5edf7; --muted:#9fb0c8; --line:#263750; --purple:#8b5cf6; --blue:#2563eb; --danger:#b42318; --icon-tile:#0b1222aa; --icon-accent:#7dd3fc; --badge-ok-text:#bbf7d0; --badge-ok-bg:#14532d88; --badge-ok-border:#166534; --badge-warn-text:#fef3c7; --badge-warn-bg:#78350f88; --badge-warn-border:#92400e; --badge-update-text:#ffedd5; --badge-update-bg:#9a341288; --badge-update-border:#c2410c; --link-text:#bfdbfe; --link-hover-text:#dbeafe; }
+html[data-theme="light"] { color-scheme: light; --bg:#f6f8fb; --panel:#ffffff; --panel2:#f2f6fb; --field:#ffffff; --text:#132033; --muted:#5d6d82; --line:#d7e0ec; --purple:#6d3fdc; --blue:#155bd5; --danger:#b42318; --icon-tile:#ffffff; --icon-accent:#155bd5; --badge-ok-text:#14532d; --badge-ok-bg:#dcfce7; --badge-ok-border:#16a34a; --badge-warn-text:#713f12; --badge-warn-bg:#fef3c7; --badge-warn-border:#d97706; --badge-update-text:#7c2d12; --badge-update-bg:#ffedd5; --badge-update-border:#ea580c; --link-text:#155bd5; --link-hover-text:#0f3f9f; }
 html[data-theme="system"] { color-scheme: light dark; }
 @media (prefers-color-scheme: light) {
-  html[data-theme="system"] { --bg:#f6f8fb; --panel:#ffffff; --panel2:#f2f6fb; --field:#ffffff; --text:#132033; --muted:#5d6d82; --line:#d7e0ec; --purple:#6d3fdc; --blue:#155bd5; --danger:#b42318; --icon-tile:#ffffff; --icon-accent:#155bd5; }
+  html[data-theme="system"] { --bg:#f6f8fb; --panel:#ffffff; --panel2:#f2f6fb; --field:#ffffff; --text:#132033; --muted:#5d6d82; --line:#d7e0ec; --purple:#6d3fdc; --blue:#155bd5; --danger:#b42318; --icon-tile:#ffffff; --icon-accent:#155bd5; --badge-ok-text:#14532d; --badge-ok-bg:#dcfce7; --badge-ok-border:#16a34a; --badge-warn-text:#713f12; --badge-warn-bg:#fef3c7; --badge-warn-border:#d97706; --badge-update-text:#7c2d12; --badge-update-bg:#ffedd5; --badge-update-border:#ea580c; --link-text:#155bd5; --link-hover-text:#0f3f9f; }
 }
 * { box-sizing:border-box; }
 body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
@@ -337,9 +342,9 @@ p { margin:6px 0 0; color:var(--muted); }
 .logo.service-icon { display:grid; place-items:center; background:var(--icon-tile); }
 .service-icon-image { width:100%; height:100%; object-fit:contain; }
 .badge { white-space:nowrap; border-radius:999px; padding:8px 11px; font-weight:800; font-size:12px; border:1px solid var(--line); display:inline-flex; align-items:center; gap:8px; }
-.badge.ok { color:#bbf7d0; background:#14532d88; border-color:#166534; }
-.badge.warn { color:#fef3c7; background:#78350f88; border-color:#92400e; }
-.badge.update { color:#ffedd5; background:#9a341288; border-color:#c2410c; }
+.badge.ok { color:var(--badge-ok-text); background:var(--badge-ok-bg); border-color:var(--badge-ok-border); }
+.badge.warn { color:var(--badge-warn-text); background:var(--badge-warn-bg); border-color:var(--badge-warn-border); }
+.badge.update, .badge.progress { color:var(--badge-update-text); background:var(--badge-update-bg); border-color:var(--badge-update-border); }
 .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:12px; }
 .grid div, label { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:10px; min-width:0; }
 span { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
@@ -379,8 +384,8 @@ input[type="checkbox"][role="switch"]:checked::before { transform:translateX(20p
 .candidate:first-child { border-top:0; }
 details { margin-top:10px; color:var(--muted); }
 details summary { cursor:pointer; font-size:12px; font-weight:800; }
-.link { color:#bae6fd; text-decoration:none; font-weight:800; }
-.link:hover { text-decoration:underline; }
+.link { color:var(--link-text); text-decoration:none; font-weight:800; }
+.link:hover { color:var(--link-hover-text); text-decoration:underline; }
 .last-run { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:12px; }
 .service-config { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:0; overflow:hidden; }
 details.service-config summary { cursor:pointer; list-style:none; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -396,7 +401,9 @@ details.service-config summary::-webkit-details-marker { display:none; }
 .technical-details summary { color:var(--muted); }
 .docker-detail-list { display:grid; grid-template-columns:1fr; gap:8px; margin-top:10px; }
 .docker-detail-list div { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:10px; }
-footer { color:#718096; margin-top:22px; font-size:12px; }
+.footer { color:#718096; margin-top:22px; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.footer span { margin:0; color:inherit; }
+.version { font-weight:800; white-space:nowrap; }
 [hidden] { display:none !important; }
 @media (max-width:760px) {
   .topbar { padding-right:56px; }

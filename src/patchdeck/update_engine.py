@@ -73,12 +73,19 @@ class UpdateEngine:
         image = service_image(service)
         labels, details = docker_labels_for_container(service_container(service))
         current_label = label_version(labels)
-        current_digest = current_repo_digest(details, image)
+        current_digest = comparable_image_digest(details, image)
         latest_label, latest_digest = (None, None)
         if image:
-            arch = (details or {}).get("Architecture") or "amd64"
-            os_name = (details or {}).get("Os") or "linux"
-            latest_label, latest_digest = self.cached_latest_image_info(image, arch, os_name)
+            local_latest_labels, local_latest_details = docker_image_details(image)
+            latest_label = label_version(local_latest_labels)
+            latest_digest = comparable_image_digest(local_latest_details, image)
+            arch = (details or {}).get("Architecture") or (local_latest_details or {}).get("Architecture") or "amd64"
+            os_name = (details or {}).get("Os") or (local_latest_details or {}).get("Os") or "linux"
+            remote_label, remote_digest = self.cached_latest_image_info(image, arch, os_name)
+            if remote_label:
+                latest_label = remote_label
+            if remote_digest and current_repo_digest(details, image):
+                latest_digest = remote_digest
 
         update_available = False
         if current_digest and latest_digest:
@@ -190,10 +197,8 @@ class UpdateEngine:
         today = time.strftime("%Y-%m-%d", time.localtime())
         if isinstance(cached, dict) and cached.get("refresh_day") == today:
             return cached.get("label"), cached.get("digest")
-        if not registry_refresh_allowed(settings):
-            if isinstance(cached, dict):
-                return cached.get("label"), cached.get("digest")
-            return None, None
+        if isinstance(cached, dict) and not registry_refresh_allowed(settings):
+            return cached.get("label"), cached.get("digest")
         label, digest = latest_registry_version(image, self.audit, arch, os_name)
         if label or digest:
             if not isinstance(cache, dict):
@@ -260,12 +265,23 @@ class UpdateEngine:
             if self._mqtt_started:
                 return
             self._mqtt_started = True
-        settings = effective_settings(self.store.get_settings())
-        if not mqtt_enabled(settings):
-            return
         threading.Thread(target=self._mqtt_publish_loop, daemon=True).start()
         threading.Thread(target=self._mqtt_command_loop, daemon=True).start()
-        self.audit("mqtt_started", host=settings.mqtt_host, port=settings.mqtt_port)
+        settings = self.effective_settings()
+        if not mqtt_enabled(settings) and settings.mqtt_host:
+            self.clear_mqtt_entities(force_mqtt_enabled(settings))
+        self.audit("mqtt_background_tasks_started")
+
+    def effective_settings(self) -> Settings:
+        return effective_settings(self.store.get_settings())
+
+    def clear_mqtt_entities(self, settings: Settings) -> None:
+        statuses = [
+            ServiceStatus(service_id=service.id, id=service.id, name=service.name)
+            for service in self.store.list_services()
+        ]
+        ok = mqtt_publish_cleanup(settings, statuses, self.audit)
+        self.audit("mqtt_entities_cleared", ok=ok, count=len(statuses))
 
     def publish_service_state(self, service: ServiceConfig, in_progress: bool | None = None, update_percentage: int | float | None = None) -> None:
         settings = effective_settings(self.store.get_settings())
@@ -301,6 +317,13 @@ class UpdateEngine:
                     continue
                 self.audit("mqtt_command_subscribed", topic=f"{settings.mqtt_base_topic}/+/command")
                 while True:
+                    if not mqtt_enabled(effective_settings(self.store.get_settings())):
+                        self.audit("mqtt_command_unsubscribed", reason="disabled")
+                        try:
+                            sock.close()
+                        except Exception:
+                            pass
+                        break
                     packet = _mqtt_read_packet(sock)
                     if packet is None:
                         raise ConnectionError("MQTT connection closed")
@@ -321,6 +344,9 @@ class UpdateEngine:
 
     def handle_mqtt_command(self, topic: str, payload: bytes) -> None:
         settings = effective_settings(self.store.get_settings())
+        if not mqtt_enabled(settings):
+            self.audit("mqtt_command_rejected", reason="mqtt_disabled")
+            return
         text = payload.decode("utf-8", "replace").strip()
         match = re.fullmatch(rf"{re.escape(settings.mqtt_base_topic)}/([^/]+)/command", topic)
         if not match:
@@ -405,6 +431,28 @@ def docker_labels_for_container(container: str) -> tuple[dict[str, str], dict[st
     except Exception:
         return {}, None
     return details.get("Config", {}).get("Labels") or {}, details
+
+
+def docker_image_details(image: str) -> tuple[dict[str, str], dict[str, Any] | None]:
+    if not image:
+        return {}, None
+    code, raw = run_cmd([DOCKER_BIN, "image", "inspect", image])
+    if code != 0:
+        return {}, None
+    try:
+        details = json.loads(raw)[0]
+    except Exception:
+        return {}, None
+    return details.get("Config", {}).get("Labels") or {}, details
+
+
+def image_id_digest(details: dict[str, Any] | None) -> str | None:
+    image_id = (details or {}).get("Id")
+    return image_id if isinstance(image_id, str) and image_id else None
+
+
+def comparable_image_digest(details: dict[str, Any] | None, image: str) -> str | None:
+    return current_repo_digest(details, image) or image_id_digest(details)
 
 
 def label_version(labels: dict[str, str]) -> str | None:
@@ -537,6 +585,12 @@ def mqtt_enabled(settings: Settings) -> bool:
     return bool(settings.mqtt_enabled and settings.mqtt_host)
 
 
+def force_mqtt_enabled(settings: Settings) -> Settings:
+    data = settings.model_dump()
+    data["mqtt_enabled"] = bool(settings.mqtt_host)
+    return Settings.model_validate(data)
+
+
 def env_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -631,6 +685,35 @@ def mqtt_publish_discovery(
         messages.append((f"{base_topic}/latest_version", latest or "", True))
     ok = mqtt_publish_batch(settings, messages, audit)
     audit("mqtt_discovery_published", ok=ok, count=len(statuses), cleanup_topics=len(settings.mqtt_retained_cleanup_topics))
+
+
+def mqtt_cleanup_messages(settings: Settings, statuses: list[ServiceStatus]) -> list[tuple[str, str | bytes, bool]]:
+    messages: list[tuple[str, str | bytes, bool]] = []
+    for topic in settings.mqtt_retained_cleanup_topics:
+        messages.append((topic, b"", True))
+    for s in statuses:
+        sid = s.id or s.service_id
+        base_topic = f"{settings.mqtt_base_topic}/{sid}"
+        discovery_topic = f"{settings.mqtt_discovery_prefix}/update/patchdeck_{sid}/config"
+        legacy_discovery_topic = f"{settings.mqtt_discovery_prefix}/update/{sid}/config"
+        messages.extend([
+            (discovery_topic, b"", True),
+            (legacy_discovery_topic, b"", True),
+            (f"{base_topic}/state", b"", True),
+            (f"{base_topic}/json", b"", True),
+            (f"{base_topic}/latest_version", b"", True),
+            (f"{base_topic}/installed_version", b"", True),
+        ])
+    return messages
+
+
+def mqtt_publish_cleanup(settings: Settings, statuses: list[ServiceStatus], audit: Any) -> bool:
+    if not mqtt_enabled(settings):
+        return False
+    messages = mqtt_cleanup_messages(settings, statuses)
+    ok = mqtt_publish_batch(settings, messages, audit)
+    audit("mqtt_cleanup_published", ok=ok, count=len(statuses), messages=len(messages))
+    return ok
 
 
 def _mqtt_encode_str(s: str) -> bytes:

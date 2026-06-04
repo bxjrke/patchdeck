@@ -1,13 +1,14 @@
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from patchdeck import docker_import, icon_cache, main
+from patchdeck import docker_import, icon_cache, main, update_engine
 from patchdeck.docker_import import icon_slug_for_service, preferred_icon_slug
 from patchdeck.main import app
-from patchdeck.models import ServiceConfig, Settings
+from patchdeck.models import ServiceConfig, ServiceStatus, Settings
 from patchdeck.store import JsonStore
-from patchdeck.update_engine import UpdateEngine, effective_settings, format_release_notes_url, mqtt_enabled
+from patchdeck.update_engine import UpdateEngine, effective_settings, format_release_notes_url, mqtt_cleanup_messages, mqtt_enabled
 
 
 client = TestClient(app)
@@ -54,7 +55,9 @@ def test_html_pages() -> None:
     assert "Docker Import" in settings_response.text
     assert "The scan is always available manually" in settings_response.text
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
-    assert "Version 0.1.1" in settings_response.text
+    assert 'class="footer"' in settings_response.text
+    assert 'aria-label="Patchdeck version"' in settings_response.text
+    assert "Patchdeck 0.1.1" in settings_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
 
@@ -229,6 +232,43 @@ def test_release_notes_url_templates(tmp_path, monkeypatch) -> None:
     assert engine.release_notes_url("unsupported", "1.2.3") is None
 
 
+def test_status_detects_update_when_local_tag_points_to_newer_image(tmp_path, monkeypatch) -> None:
+    test_store = use_test_store(tmp_path, monkeypatch)
+    engine = UpdateEngine(test_store)
+    old_image = {
+        "Id": "sha256:old",
+        "RepoDigests": [],
+        "Config": {"Labels": {"org.opencontainers.image.version": "1.0.0"}},
+    }
+    new_image = {
+        "Id": "sha256:new",
+        "RepoDigests": [],
+        "Config": {"Labels": {"org.opencontainers.image.version": "1.1.0"}},
+    }
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        if args == [update_engine.DOCKER_BIN, "inspect", "demo", "--format", "{{.Image}}"]:
+            return 0, "sha256:old"
+        if args == [update_engine.DOCKER_BIN, "image", "inspect", "sha256:old"]:
+            return 0, json.dumps([old_image])
+        if args == [update_engine.DOCKER_BIN, "image", "inspect", "example/demo:latest"]:
+            return 0, json.dumps([new_image])
+        if args == [update_engine.DOCKER_BIN, "inspect", "demo", "--format", "{{.State.Status}}"]:
+            return 0, "running"
+        return 1, "unexpected command"
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux": (None, None))
+
+    status = engine.service_status(ServiceConfig(id="demo", name="Demo", container="demo", image="example/demo:latest"))
+
+    assert status.current_version == "1.0.0"
+    assert status.latest_version == "1.1.0"
+    assert status.current_digest == "sha256:old"
+    assert status.latest_digest == "sha256:new"
+    assert status.update_available is True
+
+
 def test_mqtt_host_env_does_not_enable_mqtt_when_disabled(monkeypatch) -> None:
     monkeypatch.setenv("PATCHDECK_MQTT_HOST", "mosquitto")
 
@@ -247,6 +287,66 @@ def test_mqtt_can_be_enabled_explicitly_from_env(monkeypatch) -> None:
 
     assert settings.mqtt_enabled is True
     assert mqtt_enabled(settings) is True
+
+
+def test_mqtt_command_is_rejected_when_disabled(tmp_path) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(mqtt_enabled=False, mqtt_host="mosquitto"))
+    test_store.upsert_service(ServiceConfig(id="homeassistant", name="Home Assistant", update_enabled=True))
+    engine = UpdateEngine(test_store)
+    calls = []
+
+    def fake_perform_update(service: ServiceConfig, source: str) -> tuple[bool, str]:
+        calls.append((service.id, source))
+        return True, "ok"
+
+    engine.perform_update = fake_perform_update  # type: ignore[method-assign]
+
+    engine.handle_mqtt_command("patchdeck/homeassistant/command", b"install")
+
+    assert calls == []
+
+
+def test_mqtt_cleanup_messages_clear_home_assistant_discovery() -> None:
+    settings = Settings(mqtt_enabled=True, mqtt_host="mosquitto")
+    messages = mqtt_cleanup_messages(settings, [ServiceStatus(service_id="homeassistant", id="homeassistant", name="Home Assistant")])
+
+    assert ("homeassistant/update/patchdeck_homeassistant/config", b"", True) in messages
+    assert ("homeassistant/update/homeassistant/config", b"", True) in messages
+    assert ("patchdeck/homeassistant/state", b"", True) in messages
+    assert ("patchdeck/homeassistant/json", b"", True) in messages
+    assert ("patchdeck/homeassistant/latest_version", b"", True) in messages
+
+
+def test_disabling_mqtt_clears_retained_entities(tmp_path, monkeypatch) -> None:
+    test_store = use_test_store(tmp_path, monkeypatch)
+    test_store.update_settings(Settings(mqtt_enabled=True, mqtt_host="mosquitto"))
+    test_store.upsert_service(ServiceConfig(id="homeassistant", name="Home Assistant"))
+    cleared = []
+
+    def fake_clear(settings: Settings) -> None:
+        cleared.append(settings)
+
+    monkeypatch.setattr(main.engine, "clear_mqtt_entities", fake_clear)
+
+    response = client.put(
+        "/api/settings",
+        json={
+            "update_interval_minutes": 60,
+            "language": "de",
+            "mqtt_enabled": False,
+            "mqtt_host": "mosquitto",
+            "mqtt_port": 1883,
+            "mqtt_discovery_prefix": "homeassistant",
+            "mqtt_base_topic": "patchdeck",
+            "theme": "system",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(cleared) == 1
+    assert cleared[0].mqtt_enabled is True
+    assert cleared[0].mqtt_host == "mosquitto"
 
 
 def test_settings_roundtrip() -> None:

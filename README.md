@@ -1,6 +1,8 @@
 # Patchdeck
 
-Patchdeck is a small web UI for explicitly updating selected Docker Compose services on a Linux server.
+Patchdeck is a small web UI for explicitly updating selected Docker Compose services on a Linux server and exposing those updates as Home Assistant MQTT update entities.
+
+Its key feature is MQTT publishing for Home Assistant: Patchdeck can create one `update` entity per configured service, report installed/latest versions, and let Home Assistant trigger the same manual update action.
 
 It is intentionally narrow in scope:
 
@@ -18,6 +20,9 @@ The recommended installation path is Docker Compose with the published container
 ## Current Features
 
 - Service overview with current/latest version information where it can be detected.
+- Home Assistant MQTT discovery for per-service `update` entities.
+- MQTT state publishing for installed version, latest version, update progress, and release-note URLs.
+- Optional Home Assistant-triggered install commands for services that allow updates.
 - Docker scan/import via the local Docker socket.
 - Docker/Compose metadata detection for container name, image, compose file, project directory, and compose service.
 - Per-service update trigger using `docker compose pull` and `docker compose up -d --no-deps`.
@@ -27,7 +32,26 @@ The recommended installation path is Docker Compose with the published container
 - Optional icon path override per service.
 - Optional release-notes link per service.
 - Autosaving settings UI.
+- Version display in the UI footer.
 - English UI with German translation.
+
+## MQTT and Home Assistant
+
+MQTT is disabled by default. Enable it in the settings UI or set both `PATCHDECK_MQTT_ENABLED=true` and `PATCHDECK_MQTT_HOST`. A configured host alone does not enable publishing.
+
+When MQTT is active, Patchdeck publishes one Home Assistant `update` entity per configured service through MQTT discovery. Each entity reports the installed version, latest version, update availability, update progress, and an optional release-notes URL. If the service allows manual updates in Patchdeck, Home Assistant can trigger the same update action by sending the entity install command.
+
+Default topics:
+
+```text
+homeassistant/update/patchdeck_<service-id>/config
+patchdeck/<service-id>/state
+patchdeck/<service-id>/latest_version
+patchdeck/<service-id>/json
+patchdeck/<service-id>/command
+```
+
+The discovery prefix and base topic can be changed in the settings UI. When MQTT is switched from active to inactive, Patchdeck clears retained discovery and state topics for the configured services so stale Home Assistant entities are removed instead of lingering as retained MQTT data.
 
 ## Release Notes
 
@@ -70,17 +94,14 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - patchdeck-data:/data
+      - /your/own/path/patchdeck:/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/stacks:/opt/stacks
-
-volumes:
-  patchdeck-data:
+      - /your/compose/files:/your/compose/files
 ```
 
-Patchdeck stores settings, service configuration, audit state, registry cache, and cached icons in `/data`. The image already sets `PATCHDECK_DATA_DIR=/data`, so no environment variable is required for the default Docker setup. Override it only when using a different data path.
+Patchdeck stores settings, service configuration, audit state, registry cache, and cached icons in `/data`. The host side can be any persistent directory, for example `/opt/docker/patchdeck:/data`, `/srv/patchdeck:/data`, or a named Docker volume like `patchdeck-data:/data`. The important part is the container path: keep it as `/data` unless you also change `PATCHDECK_DATA_DIR`.
 
-Mount every host directory that contains Compose files Patchdeck should update. The mount path inside the Patchdeck container should match the host path because Docker Compose labels usually store absolute project paths. For example, if a service was started from `/opt/stacks/media/compose.yaml`, mount `/opt/stacks:/opt/stacks`.
+The Compose-files mount is only needed for services that Patchdeck should update with `docker compose pull` and `docker compose up`. Patchdeck reads absolute Compose paths from Docker labels, such as `/srv/compose/media/docker-compose.yml`, and that same path must exist inside the Patchdeck container. If your Compose files live in `/srv/compose`, mount `/srv/compose:/srv/compose`. If they live in `/opt/stacks`, mount `/opt/stacks:/opt/stacks`. If you do not want Patchdeck to run Compose updates yet, you can omit this mount and still use the UI for discovery/status where Docker metadata is available.
 
 Mounting `/var/run/docker.sock` gives Patchdeck control over the host Docker daemon. Only expose Patchdeck on a trusted private network or put it behind an authentication layer such as a reverse proxy.
 

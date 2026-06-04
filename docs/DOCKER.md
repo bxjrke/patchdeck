@@ -25,19 +25,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - patchdeck-data:/data
+      - /your/own/path/patchdeck:/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/stacks:/opt/stacks
-
-volumes:
-  patchdeck-data:
+      - /your/compose/files:/your/compose/files
 ```
 
 Open Patchdeck at `http://SERVER:8000`.
 
 ## Volumes
 
-`patchdeck-data:/data` stores Patchdeck state:
+`/your/own/path/patchdeck:/data` stores Patchdeck state:
 
 - `settings.json`
 - `services.json`
@@ -46,15 +43,21 @@ Open Patchdeck at `http://SERVER:8000`.
 - registry cache
 - cached icons
 
-The Dockerfile sets `PATCHDECK_DATA_DIR=/data`, so the Compose file does not need an `environment` entry for normal deployments. A volume alone provides storage; `PATCHDECK_DATA_DIR` tells Patchdeck which path to use. Because the image default already points to `/data`, the volume is enough.
+The host path can be any persistent directory you choose, for example `/opt/docker/patchdeck:/data`, `/srv/patchdeck:/data`, or a named Docker volume like `patchdeck-data:/data`. The important part is the container path: keep it as `/data` unless you also change `PATCHDECK_DATA_DIR`.
 
 `/var/run/docker.sock:/var/run/docker.sock` lets Patchdeck inspect containers and run Compose updates against the host Docker daemon.
 
-`/opt/stacks:/opt/stacks` is an example mount for Compose projects. Replace it with the directory that contains your own Compose files. Keep host and container paths identical whenever possible. Patchdeck discovers absolute Compose paths from Docker labels, and those paths must exist inside the Patchdeck container.
+`/your/compose/files:/your/compose/files` is optional and should be replaced with the real host directory that contains Compose files Patchdeck should update. There is no required `stacks` folder. Use whatever layout you already have. If your Compose files live in `/srv/compose`, mount `/srv/compose:/srv/compose`; if they live in `/opt/stacks`, mount `/opt/stacks:/opt/stacks`. Keeping the host path and container path identical is useful because Docker Compose labels usually contain absolute paths, and Patchdeck needs those paths to exist inside its container.
+
+If you only want Patchdeck to discover containers and show update status at first, you can omit the Compose-files mount. Add it later when you want Patchdeck to run `docker compose pull` and `docker compose up` for selected services.
 
 ## MQTT
 
 MQTT stays disabled unless it is enabled in the settings UI or with `PATCHDECK_MQTT_ENABLED=true`. Setting `PATCHDECK_MQTT_HOST` alone configures the host but does not enable MQTT publishing.
+
+When MQTT is active, Patchdeck publishes Home Assistant MQTT discovery for one `update` entity per configured service. The default discovery prefix is `homeassistant`, and the default base topic is `patchdeck`. Home Assistant sends update commands to `patchdeck/<service-id>/command` with the payload `install`; Patchdeck accepts that command only while MQTT is currently enabled and the service itself allows updates.
+
+If MQTT is disabled after it was active, Patchdeck publishes empty retained discovery/state messages for its configured services to remove stale Home Assistant entities.
 
 ## Security
 

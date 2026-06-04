@@ -6,12 +6,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - patchdeck-data:/data
+      # Stores Patchdeck settings, service config, audit logs, registry cache, and icons.
+      # Replace the host path with any persistent directory you want to use.
+      - /your/own/path/patchdeck:/data
+      # Lets Patchdeck inspect containers and run Docker Compose updates.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mount the directories that contain the Compose files Patchdeck should update.
-      # Keep the container path identical to the host path so Docker Compose labels
-      # resolve correctly, for example /opt/stacks/media/compose.yaml.
-      - /opt/stacks:/opt/stacks
-
-volumes:
-  patchdeck-data:
+      # Optional: mount the host directory that contains the Compose files Patchdeck should update.
+      # Use your real path here, and keep the same path inside the container when possible.
+      # Example: if your Compose files live in /srv/compose, use /srv/compose:/srv/compose.
+      - /your/compose/files:/your/compose/files
