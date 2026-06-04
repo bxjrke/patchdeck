@@ -83,29 +83,7 @@ https://example.test/releases
 
 Patchdeck is designed to run as a container that controls the host Docker daemon through the Docker socket. The published image includes Patchdeck, Docker CLI, and Docker Compose v2. Images are published to GitHub Container Registry as `ghcr.io/bxjrke/patchdeck`.
 
-Quick start:
-
-```yaml
-services:
-  patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.1.1
-    container_name: patchdeck
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    volumes:
-      - /your/own/path/patchdeck:/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /your/compose/files:/your/compose/files
-```
-
-Patchdeck stores settings, service configuration, audit state, registry cache, and cached icons in `/data`. The host side can be any persistent directory, for example `/opt/docker/patchdeck:/data`, `/srv/patchdeck:/data`, or a named Docker volume like `patchdeck-data:/data`. The important part is the container path: keep it as `/data` unless you also change `PATCHDECK_DATA_DIR`.
-
-The Compose-files mount is only needed for services that Patchdeck should update with `docker compose pull` and `docker compose up`. Patchdeck reads absolute Compose paths from Docker labels, such as `/srv/compose/media/docker-compose.yml`, and that same path must exist inside the Patchdeck container. If your Compose files live in `/srv/compose`, mount `/srv/compose:/srv/compose`. If they live in `/opt/stacks`, mount `/opt/stacks:/opt/stacks`. If you do not want Patchdeck to run Compose updates yet, you can omit this mount and still use the UI for discovery/status where Docker metadata is available.
-
-Mounting `/var/run/docker.sock` gives Patchdeck control over the host Docker daemon. Only expose Patchdeck on a trusted private network or put it behind an authentication layer such as a reverse proxy.
-
-More details: [Docker deployment](docs/DOCKER.md) and [Release process](docs/RELEASING.md).
+See the [Docker deployment guide](docs/DOCKER.md) for the Compose example, volume explanation, MQTT configuration, image tags, and security notes.
 
 ## License
 
