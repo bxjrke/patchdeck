@@ -1,46 +1,32 @@
 # Roadmap
 
-## Milestone 0: Project Shape
+## Product Direction
 
-- [x] Create private GitHub repository.
-- [x] Add initial backend skeleton.
-- [x] Document product direction and safety model.
-- [ ] Decide final name before public release.
+Patchdeck is a Docker-only web UI for manually updating selected containers. It should not become an automatic updater, a general server-management suite, or an authorization system.
 
-## Milestone 1: Configurable Core
+## Public Release Track
+
+- [ ] Provide a public container image.
+- [ ] Decide Docker CLI/Compose strategy for the image.
+- [ ] Add a generic installation guide.
+- [ ] Remove private sample data before repository publication.
+- [ ] Add visible app version and release metadata.
+- [ ] Add SemVer-based release workflow.
+
+## Core Docker Flow
 
 - [x] Persistent settings store.
 - [x] CRUD API for services.
 - [x] Web UI for service configuration.
 - [x] Web UI for global settings.
 - [x] Autosave for global and service settings.
-- [x] Basic audit log.
-
-## Milestone 2: Docker Import
-
 - [x] Docker API client.
-- [x] Manual import of Docker containers.
+- [x] Manual Docker scan/import.
 - [x] Detect Compose project/service labels.
-- [x] Let users accept imported services.
 - [x] Store image, container, compose project, compose file, service name, and update metadata.
+- [x] Trigger one selected Docker Compose service update at a time.
+- [x] Global update lock and last-run/audit state.
 - [x] Cache detected service icons locally.
-
-## Milestone 3: MQTT / Home Assistant
-
-- [x] MQTT settings UI.
-- [x] Home Assistant MQTT discovery for update entities.
-- [x] Publish installed/latest version state.
-- [x] Publish release URL and JSON attributes.
-- [x] Support install command through MQTT only when explicitly enabled.
-
-## Milestone 4: Update Execution
-
-- [x] Docker/Compose update adapter independent of Watchtower.
-- [ ] Dry-run/update preview.
-- [ ] Pre-update hook.
-- [ ] Post-update health check.
-- [x] Update progress tracking.
-- [ ] Rollback guidance or hook support.
 
 ## Release Notes
 
@@ -49,11 +35,16 @@
 - [x] Custom URL templates with `{version}`, `{version_url}`, `{major}`, `{minor}`, and `{patch}`.
 - [ ] UI preview/test action for release-notes links.
 
+## Internationalization
+
+- [x] English and German UI strings exist.
+- [ ] Move translations out of inline JavaScript into standalone language files.
+- [ ] Document how to add a new language by pull request.
+- [ ] Ensure source code and default UI copy are English-only.
+
 ## Later
 
-- [x] Dark/light/system theme.
-- [ ] Per-user auth.
-- [ ] Notification channels.
-- [ ] Linux package update adapter.
-- [ ] Git/Compose stack update adapter.
-- [ ] Public release hardening.
+- [ ] Improve registry/version handling for more image naming schemes.
+- [ ] Add UI feedback for autosave success/failure.
+- [ ] Add update dry-run/preview if Docker tooling allows it cleanly.
+- [ ] Public release hardening and documentation pass.

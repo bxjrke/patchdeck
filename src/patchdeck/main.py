@@ -182,18 +182,18 @@ def page_html(active: str) -> str:
     <header class="topbar">
       <div>
         <p class="eyebrow">Homelab Update Control</p>
-        <a class="title-link" href="/" aria-label="Patchdeck Hauptseite"><h1>Patchdeck</h1></a>
+        <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
       </div>
-      <a class="settings-link icon-button" href="/settings" aria-label="Einstellungen" title="Einstellungen"><i data-lucide="settings" aria-hidden="true"></i></a>
+      <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i></a>
       <div class="summary">
-        <span id="summary-services">0 Dienste</span>
-        <span id="summary-state">Bereit</span>
+        <span id="summary-services">0 services</span>
+        <span id="summary-state">Ready</span>
       </div>
     </header>
 
     {content}
 
-    <footer data-i18n="footer">Testversion. Keine Auto-Updates. Update-Ausführung wird später gezielt pro geeignetem Dienst geplant.</footer>
+    <footer data-i18n="footer">Preview build. Updates run only when triggered for a configured service.</footer>
   </main>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script>{script}
@@ -205,7 +205,7 @@ def page_html(active: str) -> str:
 
 HOME_VIEW = '''
     <section id="home-view">
-      <div id="services" class="stack notice">Lade Dienste...</div>
+      <div id="services" class="stack notice">Loading services...</div>
     </section>
 '''
 
@@ -216,14 +216,14 @@ SETTINGS_VIEW = '''
         <div class="card-head">
           <div class="identity">
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="sliders-horizontal"></i></div>
-            <h2 data-i18n="settingsGeneral">Allgemein</h2>
+            <h2 data-i18n="settingsGeneral">General</h2>
           </div>
           <span class="badge ok" data-i18n="global">Global</span>
         </div>
         <div class="grid settings-grid">
-          <label><span data-i18n="updateInterval">Update-Check-Intervall</span><span class="input-suffix"><input id="update-interval" type="number" min="1"><span>min</span></span></label>
-          <label><span data-i18n="baseUrl">Basis-URL</span><input id="base-url" placeholder="https://patchdeck.example"></label>
-          <label><span data-i18n="language">Sprache</span><select id="language"><option value="de">Deutsch</option><option value="en">English</option></select></label>
+          <label><span data-i18n="updateInterval">Update check interval</span><span class="input-suffix"><input id="update-interval" type="number" min="1"><span>min</span></span></label>
+          <label><span data-i18n="baseUrl">Base URL</span><input id="base-url" placeholder="https://patchdeck.example"></label>
+          <label><span data-i18n="language">Language</span><select id="language"><option value="de">Deutsch</option><option value="en">English</option></select></label>
         </div>
       </section>
 
@@ -233,13 +233,13 @@ SETTINGS_VIEW = '''
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="radio-tower"></i></div>
             <h2>MQTT</h2>
           </div>
-          <label class="toggle-row inline-toggle"><span id="mqtt-state-label" data-state-label="mqtt">Inaktiv</span><input id="mqtt-enabled" type="checkbox" role="switch"></label>
+          <label class="toggle-row inline-toggle"><span id="mqtt-state-label" data-state-label="mqtt">Inactive</span><input id="mqtt-enabled" type="checkbox" role="switch"></label>
         </div>
         <div id="mqtt-fields" class="grid settings-grid">
           <label><span data-i18n="mqttHost">MQTT Host</span><input id="mqtt-host" placeholder="mosquitto"></label>
           <label><span data-i18n="mqttPort">MQTT Port</span><input id="mqtt-port" type="number" min="1" max="65535"></label>
           <label><span data-i18n="mqttUser">MQTT User</span><input id="mqtt-user"></label>
-          <label><span data-i18n="mqttPassword">MQTT Passwort</span><input id="mqtt-password" type="password"></label>
+          <label><span data-i18n="mqttPassword">MQTT password</span><input id="mqtt-password" type="password"></label>
           <label><span data-i18n="mqttPrefix">MQTT Discovery Prefix</span><input id="mqtt-prefix"></label>
           <label><span data-i18n="mqttTopic">MQTT Base Topic</span><input id="mqtt-topic"></label>
         </div>
@@ -249,11 +249,11 @@ SETTINGS_VIEW = '''
         <div class="card-head">
           <div class="identity">
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="palette"></i></div>
-            <h2 data-i18n="display">Darstellung</h2>
+            <h2 data-i18n="display">Display</h2>
           </div>
         </div>
         <div class="grid settings-grid">
-          <label><span data-i18n="theme">Farbschema</span><select id="theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+          <label><span data-i18n="theme">Color scheme</span><select id="theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
         </div>
       </section>
 
@@ -261,29 +261,29 @@ SETTINGS_VIEW = '''
         <div class="card-head">
           <div class="identity">
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="server"></i></div>
-            <h2 data-i18n="services">Dienste</h2>
+            <h2 data-i18n="services">Services</h2>
           </div>
-          <span class="badge warn" data-i18n="configuration">Konfiguration</span>
+          <span class="badge warn" data-i18n="configuration">Configuration</span>
         </div>
-        <div id="service-settings" class="details-stack notice">Lade Dienste...</div>
+        <div id="service-settings" class="details-stack notice">Loading services...</div>
       </section>
 
       <section class="card">
         <div class="card-head">
           <div class="identity">
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="plus"></i></div>
-            <h2 data-i18n="createService">Dienst anlegen</h2>
+            <h2 data-i18n="createService">Create service</h2>
           </div>
-          <span class="badge warn" data-i18n="manual">Manuell</span>
+          <span class="badge warn" data-i18n="manual">Manual</span>
         </div>
         <div class="grid settings-grid">
           <label><span>ID</span><input id="service-id" placeholder="homeassistant"></label>
-          <label><span data-i18n="name">Anzeigename</span><input id="service-name" placeholder="Home Assistant"></label>
-          <label class="toggle-row"><span data-i18n="manualUpdateAction">Manuelle Update-Aktion anzeigen</span><input id="service-update-action" type="checkbox" role="switch"></label>
-          <label><span data-i18n="container">Container Name</span><input id="service-container" placeholder="homeassistant"></label>
-          <label class="wide"><span data-i18n="iconPath">Icon Pfad</span><input id="service-logo-url" placeholder="/data/icons/homeassistant.svg oder https://example/icon.svg"></label>
-          <label class="wide"><span data-i18n="releaseNotesField">Release Notes Quelle</span><input id="service-release-notes" placeholder="homeassistant"><small data-i18n="releaseNotesHelp">Optional. Nutze homeassistant für die eingebaute Home-Assistant-Erkennung oder trage eine URL ein. In URLs kann {version} durch die gefundene Version ersetzt werden.</small></label>
-          <div class="field-help wide"><span data-i18n="iconHelpTitle">Icons</span><strong data-i18n="iconHelp">Patchdeck erkennt Icons automatisch aus Container und Image und speichert gefundene Dateien lokal. Bei Bedarf kann ein Icon Pfad gesetzt werden.</strong></div>
+          <label><span data-i18n="name">Display name</span><input id="service-name" placeholder="Home Assistant"></label>
+          <label class="toggle-row"><span data-i18n="manualUpdateAction">Show update action</span><input id="service-update-action" type="checkbox" role="switch"></label>
+          <label><span data-i18n="container">Container name</span><input id="service-container" placeholder="homeassistant"></label>
+          <label class="wide"><span data-i18n="iconPath">Icon path</span><input id="service-logo-url" placeholder="/data/icons/homeassistant.svg or https://example/icon.svg"></label>
+          <label class="wide"><span data-i18n="releaseNotesField">Release notes source</span><input id="service-release-notes" placeholder="homeassistant"><small data-i18n="releaseNotesHelp">Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.</small></label>
+          <div class="field-help wide"><span data-i18n="iconHelpTitle">Icons</span><strong data-i18n="iconHelp">Patchdeck detects icons from container and image automatically and stores found files locally. Set an icon path when you want to override it.</strong></div>
         </div>
         <div class="actions" data-save-action="create-service"></div>
       </section>
@@ -296,9 +296,9 @@ SETTINGS_VIEW = '''
           </div>
           <span class="badge ok">Read-only</span>
         </div>
-        <p data-i18n="dockerImportIntro">Der Scan ist immer manuell möglich. Patchdeck liest Container, Image und Compose-Labels nur aus und legt erst nach Klick auf Import einen Dienst an.</p>
-        <div class="actions compact"><button type="button" onclick="loadDockerCandidates()"><i data-lucide="scan-line" aria-hidden="true"></i><span data-i18n="scanDocker">Docker scannen</span></button></div>
-        <div id="docker-candidates" class="notice import-list" data-i18n="dockerScanStart">Docker Scan starten, um Container zu importieren.</div>
+        <p data-i18n="dockerImportIntro">The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.</p>
+        <div class="actions compact"><button type="button" onclick="loadDockerCandidates()"><i data-lucide="scan-line" aria-hidden="true"></i><span data-i18n="scanDocker">Scan Docker</span></button></div>
+        <div id="docker-candidates" class="notice import-list" data-i18n="dockerScanStart">Start a Docker scan to import containers.</div>
       </section>
     </section>
 '''
@@ -416,31 +416,30 @@ const esc = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'
 let currentLanguage = 'de';
 const I18N = {
   de: {
-    footer: 'Testversion. Updates werden nur pro geeignetem Dienst gezielt ausgeführt.',
+    footer: 'Vorschauversion. Updates werden nur gezielt pro Dienst ausgeführt.', serviceSingular: 'Dienst', servicePlural: 'Dienste',
     settingsGeneral: 'Allgemein', global: 'Global', updateInterval: 'Update-Check-Intervall', baseUrl: 'Basis-URL', language: 'Sprache',
     mqttEnabled: 'MQTT', mqttHost: 'MQTT Host', mqttPort: 'MQTT Port', mqttUser: 'MQTT User', mqttPassword: 'MQTT Passwort', mqttPrefix: 'MQTT Discovery Prefix', mqttTopic: 'MQTT Base Topic',
     display: 'Darstellung', theme: 'Farbschema',
-    saveSettings: 'Speichern', services: 'Dienste', configuration: 'Konfiguration', createService: 'Dienst anlegen', manual: 'Manuell', name: 'Anzeigename', manualUpdateAction: 'Manuelle Update-Aktion anzeigen',
+    saveSettings: 'Speichern', services: 'Dienste', configuration: 'Konfiguration', createService: 'Dienst anlegen', manual: 'Manuell', name: 'Anzeigename', manualUpdateAction: 'Update-Aktion anzeigen',
     container: 'Container Name', image: 'Image', composeFile: 'Compose-Datei', composeProject: 'Compose Projektordner', composeService: 'Compose Service', iconSlug: 'Icon-Name', iconPath: 'Icon Pfad', iconHelpTitle: 'Icons', iconHelp: 'Patchdeck erkennt Icons automatisch aus Container und Image und speichert gefundene Dateien lokal. Bei Bedarf kann ein Icon Pfad gesetzt werden.', releaseNotesField: 'Release Notes Quelle',
     releaseNotesHelp: 'Optional. Nutze homeassistant für die eingebaute Home-Assistant-Erkennung oder trage eine URL ein. In URLs kann {version} durch die gefundene Version ersetzt werden.',
     saveService: 'Dienst speichern', dockerImport: 'Docker Import', dockerImportIntro: 'Der Scan ist immer manuell möglich. Patchdeck liest Container, Image und Compose-Labels nur aus und legt erst nach Klick auf Import einen Dienst an.', scanDocker: 'Docker scannen', dockerScanStart: 'Docker Scan starten, um Container zu importieren.',
-    loadingServices: 'Lade Dienste...', noServices: 'Noch keine Dienste konfiguriert.', settings: 'Einstellungen', releaseNotes: 'Release Notes', updateAllowed: 'Update erlaubt', save: 'Speichern', delete: 'Löschen', add: 'Hinzufügen', edit: 'Einstellungen öffnen', refresh: 'Aus Docker aktualisieren', technicalDetails: 'Erkannte Docker-Details',
+    loadingServices: 'Lade Dienste...', noServices: 'Noch keine Dienste konfiguriert.', settings: 'Einstellungen', overview: 'Übersicht', releaseNotes: 'Release Notes', installed: 'Installiert', available: 'Verfügbar', notChecked: 'Noch nicht geprüft', updateRunning: 'Update läuft', incomplete: 'Unvollständig', updateAvailable: 'Update verfügbar', upToDate: 'Aktuell', startUpdate: 'Update starten', repullCurrent: 'Aktuelle Version neu ziehen', lastUpdate: 'Letztes Update', success: 'Erfolg', error: 'Fehler', updateStarting: 'Update wird gestartet', updateAllowed: 'Update erlaubt', save: 'Speichern', delete: 'Löschen', add: 'Hinzufügen', edit: 'Einstellungen öffnen', refresh: 'Aus Docker aktualisieren', technicalDetails: 'Erkannte Docker-Details',
     active: 'Aktiv', inactive: 'Inaktiv', dockerScanning: 'Docker wird gescannt...', dockerScanFailed: 'Docker Scan fehlgeschlagen.', dockerCandidates: ' Docker Kandidaten', noContainers: 'Keine Docker Container gefunden.', compose: 'Compose', imported: 'Importiert', import: 'Import'
   },
   en: {
-    footer: 'Preview build. Updates run only when triggered for a configured service.',
+    footer: 'Preview build. Updates run only when triggered for a configured service.', serviceSingular: 'service', servicePlural: 'services',
     settingsGeneral: 'General', global: 'Global', updateInterval: 'Update check interval', baseUrl: 'Base URL', language: 'Language',
     mqttEnabled: 'MQTT', mqttHost: 'MQTT host', mqttPort: 'MQTT port', mqttUser: 'MQTT user', mqttPassword: 'MQTT password', mqttPrefix: 'MQTT discovery prefix', mqttTopic: 'MQTT base topic',
     display: 'Display', theme: 'Color scheme',
-    saveSettings: 'Save', services: 'Services', configuration: 'Configuration', createService: 'Create service', manual: 'Manual', name: 'Display name', manualUpdateAction: 'Show manual update action',
+    saveSettings: 'Save', services: 'Services', configuration: 'Configuration', createService: 'Create service', manual: 'Manual', name: 'Display name', manualUpdateAction: 'Show update action',
     container: 'Container name', image: 'Image', composeFile: 'Compose file', composeProject: 'Compose project folder', composeService: 'Compose service', iconSlug: 'Icon name', iconPath: 'Icon path', iconHelpTitle: 'Icons', iconHelp: 'Patchdeck detects icons from container and image automatically and stores found files locally. Set an icon path when you want to override it.', releaseNotesField: 'Release notes source',
     releaseNotesHelp: 'Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.',
     saveService: 'Save service', dockerImport: 'Docker import', dockerImportIntro: 'The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.', scanDocker: 'Scan Docker', dockerScanStart: 'Start a Docker scan to import containers.',
-    loadingServices: 'Loading services...', noServices: 'No services configured yet.', settings: 'Settings', releaseNotes: 'Release notes', updateAllowed: 'Updates allowed', save: 'Save', delete: 'Delete', add: 'Add', edit: 'Open settings', refresh: 'Refresh from Docker', technicalDetails: 'Detected Docker details',
+    loadingServices: 'Loading services...', noServices: 'No services configured yet.', settings: 'Settings', overview: 'Overview', releaseNotes: 'Release notes', installed: 'Installed', available: 'Available', notChecked: 'Not checked yet', updateRunning: 'Update running', incomplete: 'Incomplete', updateAvailable: 'Update available', upToDate: 'Up to date', startUpdate: 'Start update', repullCurrent: 'Pull current version again', lastUpdate: 'Last update', success: 'Success', error: 'Error', updateStarting: 'Starting update', updateAllowed: 'Updates allowed', save: 'Save', delete: 'Delete', add: 'Add', edit: 'Open settings', refresh: 'Refresh from Docker', technicalDetails: 'Detected Docker details',
     active: 'Active', inactive: 'Inactive', dockerScanning: 'Scanning Docker...', dockerScanFailed: 'Docker scan failed.', dockerCandidates: ' Docker candidates', noContainers: 'No Docker containers found.', compose: 'Compose', imported: 'Imported', import: 'Import'
   }
 };
-
 function tr(key) {
   return (I18N[currentLanguage] && I18N[currentLanguage][key]) || I18N.de[key] || key;
 }
@@ -460,8 +459,7 @@ function refreshIcons() {
 }
 
 function serviceCountText(count) {
-  if (currentLanguage === 'en') return count + (count === 1 ? ' service' : ' services');
-  return count + (count === 1 ? ' Dienst' : ' Dienste');
+  return count + ' ' + (count === 1 ? tr('serviceSingular') : tr('servicePlural'));
 }
 
 async function getServices() {
@@ -507,21 +505,21 @@ async function loadHome() {
 
 function renderServiceCards(statuses) {
   const target = document.querySelector('#services');
-  document.querySelector('#summary-state').textContent = 'Übersicht';
+  document.querySelector('#summary-state').textContent = tr('overview');
   if (!statuses.length) {
-    target.innerHTML = '<section class="card"><div class="notice">Noch keine Dienste konfiguriert.</div></section>';
+    target.innerHTML = '<section class="card"><div class="notice">' + esc(tr('noServices')) + '</div></section>';
     return;
   }
   target.innerHTML = statuses.map(service => {
     const incomplete = !service.latest_version;
     const badgeClass = service.update_in_progress ? 'progress' : (incomplete ? 'warn' : (service.update_available ? 'update' : 'ok'));
-    const badgeText = service.update_in_progress ? 'Update läuft' : (incomplete ? 'Unvollständig' : (service.update_available ? 'Update verfügbar' : 'Aktuell'));
+    const badgeText = service.update_in_progress ? tr('updateRunning') : (incomplete ? tr('incomplete') : (service.update_available ? tr('updateAvailable') : tr('upToDate')));
     const releaseLink = service.release_notes_url ? '<a class="link" href="' + esc(service.release_notes_url) + '" target="_blank" rel="noreferrer">Release Notes</a>' : '';
     const action = service.update_enabled
-      ? '<button type="button" onclick="runUpdate(\'' + esc(service.service_id) + '\')" ' + (service.update_in_progress ? 'disabled' : '') + ' data-idle-label="Update starten">' + (service.update_available ? 'Update starten' : 'Aktuelle Version neu ziehen') + '</button>'
+      ? '<button type="button" onclick="runUpdate(\'' + esc(service.service_id) + '\')" ' + (service.update_in_progress ? 'disabled' : '') + ' data-idle-label="' + esc(tr('startUpdate')) + '">' + (service.update_available ? esc(tr('startUpdate')) : esc(tr('repullCurrent')) ) + '</button>'
       : '';
     const lastRun = service.last_run
-      ? '<div class="last-run"><span>Letztes Update</span><strong>' + esc(service.last_run.ok ? 'Erfolg' : 'Fehler') + ' · ' + esc(formatTs(service.last_run.ts)) + '</strong></div>'
+      ? '<div class="last-run"><span>' + esc(tr('lastUpdate')) + '</span><strong>' + esc(service.last_run.ok ? tr('success') : tr('error')) + ' · ' + esc(formatTs(service.last_run.ts)) + '</strong></div>'
       : '';
     return '<section class="card" data-service="' + esc(service.id) + '">' +
       '<div class="card-head">' +
@@ -529,10 +527,10 @@ function renderServiceCards(statuses) {
         '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>' +
       '<div class="grid">' +
-        '<div><span>Container</span><strong>' + esc(service.container) + '</strong></div>' +
+        '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(service.container) + '</strong></div>' +
         '<div><span>Status</span><strong data-role="container-state">' + esc(service.state) + '</strong></div>' +
-        '<div><span>Installiert</span><strong>' + esc(service.current_version || 'Noch nicht geprüft') + '</strong></div>' +
-        '<div><span>Verfügbar</span><strong>' + esc(service.latest_version || 'Noch nicht geprüft') + '</strong></div>' +
+        '<div><span>' + esc(tr('installed')) + '</span><strong>' + esc(service.current_version || tr('notChecked')) + '</strong></div>' +
+        '<div><span>' + esc(tr('available')) + '</span><strong>' + esc(service.latest_version || tr('notChecked')) + '</strong></div>' +
       '</div>' +
       '<details><summary>Image</summary><code>' + esc(service.image || '—') + '</code></details>' +
       '<div class="actions">' + action + releaseLink + '</div>' +
@@ -551,7 +549,7 @@ async function runUpdate(id) {
   const button = card?.querySelector('button');
   const state = card?.querySelector('[data-role="container-state"]');
   if (button) button.disabled = true;
-  if (state) state.textContent = 'Update wird gestartet';
+  if (state) state.textContent = tr('updateStarting');
   try {
     await api('/api/services/' + encodeURIComponent(id) + '/update', {method: 'POST', body: '{}'});
   } finally {
@@ -816,7 +814,7 @@ async function loadDockerCandidates() {
   }
   target.innerHTML = candidates.map(candidate =>
     '<div class="candidate">' +
-      '<div><span>Container</span><strong>' + esc(candidate.name) + '</strong><code>' + esc(candidate.id) + '</code></div>' +
+      '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(candidate.name) + '</strong><code>' + esc(candidate.id) + '</code></div>' +
       '<div><span>Image</span><strong>' + esc(candidate.image) + '</strong></div>' +
       '<div><span>' + esc(tr('compose')) + '</span><strong>' + esc(candidate.compose_project || '-') + '</strong><code>' + esc(candidate.compose_service || '-') + '</code></div>' +
       '<button type="button" ' + (candidate.already_configured ? 'disabled' : '') + ' onclick="importCandidate(\'' + esc(candidate.id) + '\')"><i data-lucide="' + (candidate.already_configured ? 'check' : 'download') + '" aria-hidden="true"></i><span>' + (candidate.already_configured ? esc(tr('imported')) : esc(tr('import'))) + '</span></button>' +

@@ -120,7 +120,7 @@ class UpdateEngine:
             except BlockingIOError:
                 self.audit("update_busy", service=service_id, source=source)
                 self.publish_service_state(service, in_progress=True)
-                return False, "Es läuft bereits ein Update. Bitte kurz warten."
+                return False, "An update is already running. Please wait."
             self.mark_update_active(service_id, True, source)
             self.audit("update_start", service=service_id, source=source)
             self.publish_service_state(service, in_progress=True, update_percentage=0)
@@ -130,7 +130,7 @@ class UpdateEngine:
             self.audit("update_done", service=service_id, source=source, ok=ok, exit_code=code, output=output[-1200:])
             self.mark_update_active(service_id, False)
             self.publish_service_state(service, in_progress=False)
-            return ok, "Update wurde ausgeführt." if ok else "Update ist fehlgeschlagen. Details stehen im Audit-Log."
+            return ok, "Update completed." if ok else "Update failed. Details are available in the audit log."
 
     def run_update(self, service: ServiceConfig) -> tuple[int, str]:
         service_id = service.id
@@ -146,7 +146,7 @@ class UpdateEngine:
         if not project_dir and compose_file:
             project_dir = str(Path(compose_file).parent)
         if not compose_file or not compose_service:
-            return 1, "Service ist nicht vollständig konfiguriert."
+            return 1, "Service is not fully configured."
         pull = [DOCKER_BIN, "compose", "-f", compose_file, "pull", compose_service]
         up = [DOCKER_BIN, "compose", "-f", compose_file, "up", "-d", "--no-deps", compose_service]
         self.mark_update_active(service_id, True, phase="Pulling Image")
@@ -165,7 +165,7 @@ class UpdateEngine:
         data[service_id] = payload
         atomic_json(self.last_run_file, data)
 
-    def mark_update_active(self, service_id: str, active: bool, source: str = "unknown", phase: str = "Update wird gestartet") -> None:
+    def mark_update_active(self, service_id: str, active: bool, source: str = "unknown", phase: str = "Starting update") -> None:
         with self._active_lock:
             if active:
                 existing = self._active_updates.get(service_id) or {}

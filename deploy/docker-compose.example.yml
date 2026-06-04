@@ -1,13 +1,20 @@
 services:
   patchdeck:
+    # Replace with a published image once releases are available, for example:
+    # image: ghcr.io/OWNER/patchdeck:VERSION
     build: ..
     container_name: patchdeck
     restart: unless-stopped
     environment:
       PATCHDECK_DATA_DIR: /data
+      PATCHDECK_DOCKER_BIN: /usr/bin/docker
     volumes:
       - patchdeck-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Current builds rely on Docker CLI/Compose being available in the container.
+      # These host-binary mounts are a development bridge, not the final public-image model.
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins/docker-compose:/usr/libexec/docker/cli-plugins/docker-compose:ro
     ports:
       - "8000:8000"
 

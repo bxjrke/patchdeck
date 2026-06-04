@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 class UpdatePolicy(StrEnum):
     MANUAL = "manual"
-    AUTO = "auto"
     DISABLED = "disabled"
 
 
@@ -65,7 +64,6 @@ class Settings(BaseModel):
         "update-hub/demo-service/latest_version",
         "update-hub/homeassistant/installed_version",
     ])
-    docker_auto_import_enabled: bool = True
     theme: str = "system"
     base_url: str = ""
     registry_refresh_hour: int = Field(default=3, ge=0, le=23)

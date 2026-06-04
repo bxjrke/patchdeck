@@ -33,16 +33,16 @@ def test_html_pages() -> None:
     assert index_response.status_code == 200
     assert 'id="docker-candidates"' not in index_response.text
     assert settings_response.status_code == 200
-    assert "Update-Check-Intervall" in settings_response.text
+    assert "Update check interval" in settings_response.text
     assert "Update-Check-Intervall Minuten" not in settings_response.text
     assert "min" in settings_response.text
     assert 'id="mqtt-enabled" type="checkbox" role="switch"' in settings_response.text
     assert 'id="mqtt-fields"' in settings_response.text
     assert 'id="language"' in settings_response.text
-    assert "Release Notes Quelle" in settings_response.text
+    assert "Release notes source" in settings_response.text
     assert "Docker-Scan Importvorschläge" not in settings_response.text
-    assert "Icon Pfad" in settings_response.text
-    assert "speichert gefundene Dateien lokal" in settings_response.text
+    assert "Icon path" in settings_response.text
+    assert "stores found files locally" in settings_response.text
     assert "Hinzufügen" in settings_response.text
     assert "{version}" in settings_response.text
     assert "saveButton(\"saveExistingService" not in settings_response.text
@@ -52,8 +52,8 @@ def test_html_pages() -> None:
     assert 'id="mqtt-state-label"' in settings_response.text
     assert "lucide" in settings_response.text
     assert "Docker Import" in settings_response.text
-    assert "Der Scan ist immer manuell möglich" in settings_response.text
-    assert "Updates werden nur pro geeignetem Dienst gezielt ausgeführt" in settings_response.text
+    assert "The scan is always available manually" in settings_response.text
+    assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
 
@@ -111,8 +111,8 @@ def test_service_refresh_from_docker(tmp_path, monkeypatch) -> None:
             name=base.name,
             container="bazarr",
             image="lscr.io/linuxserver/bazarr:latest",
-            compose_file="/opt/stacks/media/docker-compose.yml",
-            compose_project_dir="/opt/stacks/media",
+            compose_file="/srv/patchdeck/examples/media/docker-compose.yml",
+            compose_project_dir="/srv/patchdeck/examples/media",
             compose_service="bazarr",
             icon_slug="bazarr",
         )
@@ -235,7 +235,6 @@ def test_settings_roundtrip() -> None:
         "mqtt_enabled": True,
         "mqtt_discovery_prefix": "homeassistant",
         "mqtt_base_topic": "patchdeck",
-        "docker_auto_import_enabled": False,
         "theme": "dark",
     }
 

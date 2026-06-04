@@ -1,40 +1,40 @@
 # Patchdeck
 
-Private early-stage project for a service-oriented homelab update hub.
+Patchdeck is a small web UI for explicitly updating selected Docker Compose services on a Linux server.
 
-Patchdeck tracks update availability across homelab services, exposes a web UI,
-publishes optional Home Assistant MQTT update entities, and can run explicit
-Docker/Compose updates for configured services. Docker is the first adapter, not
-the whole product.
+It is intentionally narrow in scope:
+
+- Docker and Docker Compose only.
+- No automatic updates.
+- No authorization layer in Patchdeck itself.
+- Updates are triggered one service at a time by a user who already controls the server.
+
+Patchdeck is meant for private homelabs where the operator wants a comfortable web surface for selected container updates without running a broad auto-updater.
 
 ## Current Features
 
-- FastAPI backend with file-backed settings and service configuration.
-- Built-in responsive web UI for the service overview and settings.
-- Docker scan/import through the local Docker socket.
-- Docker/Compose metadata detection for container name, image, compose file,
-  project directory, and compose service.
-- Explicit per-service Docker Compose updates with a global update lock, progress
-  state, audit log, and last-run state.
-- Registry checks with digest/label heuristics and a local cache.
-- Home Assistant MQTT discovery and command handling for update entities.
-- Local icon cache for detected service icons, plus an `Icon Pfad` override for a
-  local path or URL.
-- Autosaving global settings and service settings in the web UI.
-- Light/dark/system theme selection.
+- Service overview with current/latest version information where it can be detected.
+- Docker scan/import via the local Docker socket.
+- Docker/Compose metadata detection for container name, image, compose file, project directory, and compose service.
+- Per-service update trigger using `docker compose pull` and `docker compose up -d --no-deps`.
+- Global update lock and last-run/audit state.
+- Local registry cache for latest-image checks.
+- Local icon cache for detected service icons.
+- Optional icon path override per service.
+- Optional release-notes link per service.
+- Autosaving settings UI.
+- English UI with German translation.
 
 ## Release Notes
 
-Each service has a `Release Notes Quelle` field. It is optional.
+Each service has an optional release-notes source.
 
 Supported values:
 
 - Empty: no release-notes link is shown.
-- `homeassistant`: uses Patchdeck built-in Home Assistant release-notes lookup.
-  This is currently the only service-specific template shipped by Patchdeck.
+- `homeassistant`: uses Patchdeck built-in Home Assistant release-notes lookup. This is currently the only service-specific helper shipped by Patchdeck.
 - A full `https://` or `http://` URL: shown as the release-notes link.
-- A URL template with placeholders: Patchdeck replaces placeholders from the
-  detected latest version.
+- A URL template with placeholders: Patchdeck replaces placeholders from the detected latest version.
 
 Supported placeholders:
 
@@ -51,13 +51,14 @@ https://example.test/changelog/{major}/{minor}
 https://example.test/releases
 ```
 
-## Safety Principles
+## Installation Status
 
-- No secrets in repo or service config examples.
-- Updating must be explicit unless a service is deliberately marked for auto-update
-  in a future adapter.
-- Docker socket access is powerful; keep the permission model visible.
-- Prefer health checks and reversible hooks before unattended updates.
+Patchdeck is not release-ready yet. The current Dockerfile builds the application, but update execution still depends on Docker CLI and Docker Compose being available in the container. For a public image, this needs either:
+
+- a documented compose setup that mounts the host Docker binary and Compose plugin, or
+- a self-contained image that includes compatible Docker CLI and Compose tooling.
+
+The second option is better for broad public use and is still open work.
 
 ## Development
 
@@ -71,27 +72,22 @@ uvicorn patchdeck.main:app --reload
 
 Open: http://127.0.0.1:8000
 
-## Homeserver Deployment
+## Versioning
 
-On the Smartheim homeserver, Patchdeck is deployed as a Docker Compose stack:
+Patchdeck should use SemVer once releases begin:
 
-```bash
-docker compose -f /opt/stacks/patchdeck/docker-compose.yml up -d --build patchdeck
-```
+- `0.x`: pre-release iteration, breaking changes allowed.
+- `1.0.0`: first stable public image and documented install path.
+- Patch releases: bug fixes only.
+- Minor releases: backwards-compatible features.
+- Major releases: breaking configuration or API changes.
 
-The live stack builds from `/home/bxjrke/projects/patchdeck` and stores state in
-`/opt/docker/patchdeck`. Keep the repo current, run tests, then rebuild the
-container so https://patchdeck.smartheim.eu receives the changes.
+## Road To Public Release
 
-## Open TODOs
-
-- Add authentication and authorization before any broader exposure.
-- Add dry-run/update preview before update execution.
-- Add pre-update and post-update hooks with health checks.
-- Add rollback guidance or rollback hooks.
-- Broaden adapters beyond Docker/Compose, for example Git/Compose stacks, Linux
-  packages over SSH, and custom scripts.
-- Improve registry/version handling for more image naming schemes.
+- Publish a working container image, preferably via GitHub Container Registry.
+- Decide whether the image bundles Docker CLI/Compose or documents host-binary mounts.
+- Move translations into standalone language files so new languages can be added by PR.
+- Remove private example data from the repository before making it public.
+- Add a public install guide based on a generic Linux server.
 - Add UI feedback for autosave success/failure.
-- Add user-managed release-note helpers only when there is a clear reusable need;
-  for now only Home Assistant has a built-in helper.
+- Add release/version display in the UI.
