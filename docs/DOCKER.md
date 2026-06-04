@@ -52,6 +52,10 @@ The Dockerfile sets `PATCHDECK_DATA_DIR=/data`, so the Compose file does not nee
 
 `/opt/stacks:/opt/stacks` is an example mount for Compose projects. Replace it with the directory that contains your own Compose files. Keep host and container paths identical whenever possible. Patchdeck discovers absolute Compose paths from Docker labels, and those paths must exist inside the Patchdeck container.
 
+## MQTT
+
+MQTT stays disabled unless it is enabled in the settings UI or with `PATCHDECK_MQTT_ENABLED=true`. Setting `PATCHDECK_MQTT_HOST` alone configures the host but does not enable MQTT publishing.
+
 ## Security
 
 Mounting the Docker socket gives Patchdeck effective control over the host Docker daemon. Treat access to Patchdeck like access to Docker itself.

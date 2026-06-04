@@ -5,6 +5,7 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.title="Patchdeck" \
       org.opencontainers.image.description="A small web UI for explicitly updating selected Docker Compose services." \
       org.opencontainers.image.source="https://github.com/bxjrke/patchdeck" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="0.1.0"
 
 WORKDIR /app

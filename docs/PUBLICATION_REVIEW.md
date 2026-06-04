@@ -1,6 +1,6 @@
 # Publication Review
 
-Patchdeck is directionally publishable, but it is not ready for a public 1.0 release yet.
+Patchdeck is directionally publishable as a `0.x` homelab tool. It is not a public `1.0` yet, but the core Docker image and release path are now in place.
 
 ## Product Scope
 
@@ -13,17 +13,17 @@ Patchdeck should remain narrow:
 
 ## Image Readiness
 
-The current Dockerfile can build the app image. The missing public-image decision is Docker tooling:
+Ready:
 
-1. Bundle Docker CLI and Docker Compose in the image.
-   - Better user experience.
-   - More maintenance burden because Docker CLI/Compose versions must be tracked.
+- The image bundles Patchdeck, Docker CLI, and Docker Compose.
+- The image exposes `/healthz` and persists state in `/data`.
+- GitHub Actions builds `linux/amd64` and `linux/arm64` images.
+- Versioned tags are published from SemVer Git tags.
 
-2. Require users to mount host Docker CLI and Compose plugin.
-   - Matches the current development/deployment model.
-   - Less portable because binary paths differ by distribution.
+Still required outside the repository:
 
-Recommendation before public release: bundle Docker CLI and Compose in the image or provide a very explicit compatibility matrix for host-binary mounts.
+- Make the GHCR package public.
+- Verify anonymous pulls from a clean machine.
 
 ## Repository Readiness
 
@@ -32,25 +32,24 @@ Ready or mostly ready:
 - Core FastAPI app exists.
 - Docker scan/import exists.
 - Manual per-service update flow exists.
+- MQTT disabled state no longer becomes enabled just because an MQTT host is configured.
 - Local icon cache exists.
 - Basic tests exist.
-- README now avoids private deployment details.
+- MIT license exists.
+- Public Docker deployment docs exist.
 
-Needs work before public release:
+Still worth doing after the first public image:
 
 - Move UI translations out of inline JavaScript into standalone files.
 - Add documented language contribution flow.
-- Add release/version display in the UI.
-- Add GitHub release and container publishing workflow.
-- Decide image Docker CLI/Compose strategy.
-- Add public install docs with generic Linux paths.
-- Remove generated or local-only artifacts before making the repository public.
-- Consider user-facing warnings about Docker socket privileges without framing Patchdeck as an auth/security product.
+- Improve registry/version handling for more image naming schemes.
+- Add UI feedback for autosave success/failure.
 
 ## Versioning
 
 Use SemVer:
 
 - Continue with `0.x` while configuration and install method can still change.
-- Tag public images as both immutable versions, e.g. `0.2.0`, and moving tracks such as `0` or `latest` only when intentionally desired.
+- Tag public images as immutable versions, for example `0.1.1`, and minor tracks such as `0.1`.
+- Avoid moving already-pushed release tags.
 - Reserve `1.0.0` for the first stable public install path.

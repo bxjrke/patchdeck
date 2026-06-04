@@ -86,6 +86,10 @@ Mounting `/var/run/docker.sock` gives Patchdeck control over the host Docker dae
 
 More details: [Docker deployment](docs/DOCKER.md) and [Release process](docs/RELEASING.md).
 
+## License
+
+Patchdeck is released under the [MIT License](LICENSE).
+
 ## Development
 
 ```bash

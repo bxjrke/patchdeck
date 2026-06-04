@@ -14,34 +14,35 @@ No separate GHCR token is required for the included workflow.
 ## Release Checklist
 
 1. Update the project version in `pyproject.toml`.
-2. Update the OCI version label in `Dockerfile`.
-3. Update the version tag in `README.md` and `deploy/docker-compose.example.yml`.
-4. Run tests locally:
+2. Update `src/patchdeck/__init__.py` and the FastAPI/UI-visible version.
+3. Update the OCI version label in `Dockerfile`.
+4. Update the version tag in `README.md` and `deploy/docker-compose.example.yml`.
+5. Run tests locally:
 
 ```bash
 .venv/bin/pytest
 ```
 
-5. Build the image locally:
+6. Build the image locally:
 
 ```bash
 docker build -t patchdeck:test .
 ```
 
-6. Check Docker Compose inside the image:
+7. Check Docker Compose inside the image:
 
 ```bash
 docker run --rm patchdeck:test docker compose version
 ```
 
-7. Check the app imports in the image:
+8. Check the app imports in the image:
 
 ```bash
 docker run --rm patchdeck:test python -c "from patchdeck.main import app, healthz; print(app.title, healthz())"
 ```
 
-8. Commit the release changes.
-9. Create and push a SemVer tag prefixed with `v`:
+9. Commit the release changes.
+10. Create and push a SemVer tag prefixed with `v`:
 
 ```bash
 git tag v0.1.0
@@ -59,7 +60,6 @@ The workflow builds for `linux/amd64` and `linux/arm64` using Docker Buildx and 
 
 ## Before a Public Announcement
 
-- Add a project license.
 - Confirm the GHCR package visibility is public.
 - Test the published image on a clean host with a real Compose stack mounted under the same path inside the Patchdeck container.
 - Review the README security warning around `/var/run/docker.sock`.

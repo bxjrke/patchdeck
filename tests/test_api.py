@@ -5,9 +5,9 @@ from fastapi.testclient import TestClient
 from patchdeck import docker_import, icon_cache, main
 from patchdeck.docker_import import icon_slug_for_service, preferred_icon_slug
 from patchdeck.main import app
-from patchdeck.models import ServiceConfig
+from patchdeck.models import ServiceConfig, Settings
 from patchdeck.store import JsonStore
-from patchdeck.update_engine import UpdateEngine, format_release_notes_url
+from patchdeck.update_engine import UpdateEngine, effective_settings, format_release_notes_url, mqtt_enabled
 
 
 client = TestClient(app)
@@ -54,6 +54,7 @@ def test_html_pages() -> None:
     assert "Docker Import" in settings_response.text
     assert "The scan is always available manually" in settings_response.text
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
+    assert "Version 0.1.0" in settings_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
 
@@ -226,6 +227,26 @@ def test_release_notes_url_templates(tmp_path, monkeypatch) -> None:
     assert engine.release_notes_url("https://example.test/releases/{version_url}", "2026.6 beta") == "https://example.test/releases/2026.6%20beta"
     assert engine.release_notes_url("https://example.test/changelog", "1.2.3") == "https://example.test/changelog"
     assert engine.release_notes_url("unsupported", "1.2.3") is None
+
+
+def test_mqtt_host_env_does_not_enable_mqtt_when_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("PATCHDECK_MQTT_HOST", "mosquitto")
+
+    settings = effective_settings(Settings(mqtt_enabled=False))
+
+    assert settings.mqtt_host == "mosquitto"
+    assert settings.mqtt_enabled is False
+    assert mqtt_enabled(settings) is False
+
+
+def test_mqtt_can_be_enabled_explicitly_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("PATCHDECK_MQTT_ENABLED", "true")
+    monkeypatch.setenv("PATCHDECK_MQTT_HOST", "mosquitto")
+
+    settings = effective_settings(Settings(mqtt_enabled=False))
+
+    assert settings.mqtt_enabled is True
+    assert mqtt_enabled(settings) is True
 
 
 def test_settings_roundtrip() -> None:

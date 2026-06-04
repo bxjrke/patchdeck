@@ -537,9 +537,14 @@ def mqtt_enabled(settings: Settings) -> bool:
     return bool(settings.mqtt_enabled and settings.mqtt_host)
 
 
+def env_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def effective_settings(settings: Settings) -> Settings:
     data = settings.model_dump()
     env_map = {
+        "mqtt_enabled": ("PATCHDECK_MQTT_ENABLED", "UPDATE_HUB_MQTT_ENABLED"),
         "mqtt_host": ("PATCHDECK_MQTT_HOST", "UPDATE_HUB_MQTT_HOST"),
         "mqtt_port": ("PATCHDECK_MQTT_PORT", "UPDATE_HUB_MQTT_PORT"),
         "mqtt_user": ("PATCHDECK_MQTT_USER", "UPDATE_HUB_MQTT_USER"),
@@ -552,10 +557,13 @@ def effective_settings(settings: Settings) -> Settings:
         for name in names:
             value = os.environ.get(name)
             if value not in (None, ""):
-                data[key] = int(value) if key == "mqtt_port" else value
+                if key == "mqtt_port":
+                    data[key] = int(value)
+                elif key == "mqtt_enabled":
+                    data[key] = env_bool(value)
+                else:
+                    data[key] = value
                 break
-    if data["mqtt_host"]:
-        data["mqtt_enabled"] = True
     cleanup = os.environ.get("PATCHDECK_MQTT_RETAINED_CLEANUP_TOPICS") or os.environ.get("UPDATE_HUB_MQTT_RETAINED_CLEANUP_TOPICS")
     if cleanup:
         data["mqtt_retained_cleanup_topics"] = [topic.strip() for topic in cleanup.split(",") if topic.strip()]

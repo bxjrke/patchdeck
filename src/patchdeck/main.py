@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .docker_import import list_container_candidates, service_from_container
 from .icon_cache import cache_service_icon
 from .models import DockerImportCandidate, ServiceConfig, ServiceStatus, Settings
@@ -22,7 +23,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Patchdeck", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Patchdeck", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(packages=[("patchdeck", "static")]), name="static")
 
 
@@ -193,7 +194,7 @@ def page_html(active: str) -> str:
 
     {content}
 
-    <footer data-i18n="footer">Preview build. Updates run only when triggered for a configured service.</footer>
+    <footer><span data-i18n="footer">Preview build. Updates run only when triggered for a configured service.</span> <span>Version {__version__}</span></footer>
   </main>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script>{script}
