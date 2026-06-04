@@ -11,6 +11,10 @@ It is intentionally narrow in scope:
 
 Patchdeck is meant for private homelabs where the operator wants a comfortable web surface for selected container updates without running a broad auto-updater.
 
+## Installation
+
+The recommended installation path is Docker Compose with the published container image. See the [Docker deployment guide](docs/DOCKER.md) for the full setup, required volume mounts, and security notes.
+
 ## Current Features
 
 - Service overview with current/latest version information where it can be detected.
@@ -51,14 +55,36 @@ https://example.test/changelog/{major}/{minor}
 https://example.test/releases
 ```
 
-## Installation Status
+## Docker Image
 
-Patchdeck is not release-ready yet. The current Dockerfile builds the application, but update execution still depends on Docker CLI and Docker Compose being available in the container. For a public image, this needs either:
+Patchdeck is designed to run as a container that controls the host Docker daemon through the Docker socket. The published image includes Patchdeck, Docker CLI, and Docker Compose v2. Images are published to GitHub Container Registry as `ghcr.io/bxjrke/patchdeck`.
 
-- a documented compose setup that mounts the host Docker binary and Compose plugin, or
-- a self-contained image that includes compatible Docker CLI and Compose tooling.
+Quick start:
 
-The second option is better for broad public use and is still open work.
+```yaml
+services:
+  patchdeck:
+    image: ghcr.io/bxjrke/patchdeck:0.1.0
+    container_name: patchdeck
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - patchdeck-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/stacks:/opt/stacks
+
+volumes:
+  patchdeck-data:
+```
+
+Patchdeck stores settings, service configuration, audit state, registry cache, and cached icons in `/data`. The image already sets `PATCHDECK_DATA_DIR=/data`, so no environment variable is required for the default Docker setup. Override it only when using a different data path.
+
+Mount every host directory that contains Compose files Patchdeck should update. The mount path inside the Patchdeck container should match the host path because Docker Compose labels usually store absolute project paths. For example, if a service was started from `/opt/stacks/media/compose.yaml`, mount `/opt/stacks:/opt/stacks`.
+
+Mounting `/var/run/docker.sock` gives Patchdeck control over the host Docker daemon. Only expose Patchdeck on a trusted private network or put it behind an authentication layer such as a reverse proxy.
+
+More details: [Docker deployment](docs/DOCKER.md) and [Release process](docs/RELEASING.md).
 
 ## Development
 
@@ -84,10 +110,10 @@ Patchdeck should use SemVer once releases begin:
 
 ## Road To Public Release
 
-- Publish a working container image, preferably via GitHub Container Registry.
-- Decide whether the image bundles Docker CLI/Compose or documents host-binary mounts.
+- Publish the first multi-arch image to GitHub Container Registry.
+- Make the GHCR package public after the first successful push.
+- Choose and add a project license before wider public announcement.
 - Move translations into standalone language files so new languages can be added by PR.
 - Remove private example data from the repository before making it public.
-- Add a public install guide based on a generic Linux server.
 - Add UI feedback for autosave success/failure.
 - Add release/version display in the UI.
