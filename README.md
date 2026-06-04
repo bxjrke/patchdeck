@@ -108,12 +108,3 @@ Patchdeck should use SemVer once releases begin:
 - Minor releases: backwards-compatible features.
 - Major releases: breaking configuration or API changes.
 
-## Road To Public Release
-
-- Publish the first multi-arch image to GitHub Container Registry.
-- Make the GHCR package public after the first successful push.
-- Choose and add a project license before wider public announcement.
-- Move translations into standalone language files so new languages can be added by PR.
-- Remove private example data from the repository before making it public.
-- Add UI feedback for autosave success/failure.
-- Add release/version display in the UI.

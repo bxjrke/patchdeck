@@ -4,14 +4,20 @@
 
 Patchdeck is a Docker-only web UI for manually updating selected containers. It should not become an automatic updater, a general server-management suite, or an authorization system.
 
+## Top Priority
+
+- [ ] Fix MQTT publishing when MQTT is disabled. The UI can show MQTT as inactive while Patchdeck still publishes MQTT messages; disabled MQTT must fully suppress MQTT publishing and background MQTT behavior.
+
 ## Public Release Track
 
-- [ ] Provide a public container image.
-- [ ] Decide Docker CLI/Compose strategy for the image.
-- [ ] Add a generic installation guide.
+- [x] Provide a public multi-arch container image via GitHub Container Registry.
+- [x] Bundle Docker CLI and Docker Compose in the image instead of relying on host-binary mounts.
+- [x] Add a generic Docker installation guide.
+- [x] Add SemVer-based container release workflow.
+- [ ] Make the GHCR package public after the first successful push.
+- [ ] Choose and add a project license before wider public announcement.
 - [ ] Remove private sample data before repository publication.
 - [ ] Add visible app version and release metadata.
-- [ ] Add SemVer-based release workflow.
 
 ## Core Docker Flow
 
