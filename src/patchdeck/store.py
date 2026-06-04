@@ -17,6 +17,10 @@ class JsonStore:
         self._settings = self._load_settings()
         self._services = self._load_services()
 
+    @property
+    def data_dir(self) -> Path:
+        return self._data_dir
+
     def _load_settings(self) -> Settings:
         try:
             return Settings.model_validate_json(self._settings_path.read_text(encoding="utf-8"))
@@ -28,7 +32,7 @@ class JsonStore:
     def _load_services(self) -> dict[str, ServiceConfig]:
         try:
             raw = json.loads(self._services_path.read_text(encoding="utf-8"))
-            services = [ServiceConfig.model_validate(item) for item in raw]
+            services = [ServiceConfig.model_validate(migrate_service_item(item)) for item in raw]
             return {service.id: service for service in services}
         except FileNotFoundError:
             return {}
@@ -61,6 +65,11 @@ class JsonStore:
         with self._lock:
             return [service.model_copy(deep=True) for service in self._services.values()]
 
+    def get_service(self, service_id: str) -> ServiceConfig | None:
+        with self._lock:
+            service = self._services.get(service_id)
+            return service.model_copy(deep=True) if service else None
+
     def upsert_service(self, service: ServiceConfig) -> ServiceConfig:
         with self._lock:
             self._services[service.id] = service
@@ -73,3 +82,30 @@ class JsonStore:
             if deleted:
                 self._save_locked()
             return deleted
+
+
+def migrate_service_item(item: dict[str, object]) -> dict[str, object]:
+    metadata = item.get("metadata")
+    if not isinstance(metadata, dict):
+        return item
+    migrated = dict(item)
+    mapping = {
+        "logo_url": "logo_url",
+        "icon_slug": "icon_slug",
+        "container": "container",
+        "image": "image",
+        "repo": "repo",
+        "compose_file": "compose_file",
+        "compose_project_dir": "compose_project_dir",
+        "compose_service": "compose_service",
+        "release_notes": "release_notes",
+        "update_action_enabled": "update_enabled",
+    }
+    for old_key, new_key in mapping.items():
+        if migrated.get(new_key) in (None, "") and metadata.get(old_key) not in (None, ""):
+            migrated[new_key] = metadata[old_key]
+    if migrated.get("compose_project_dir") in (None, "") and metadata.get("compose_project") not in (None, ""):
+        migrated["compose_project_dir"] = metadata["compose_project"]
+    if metadata.get("update_action_enabled") and migrated.get("update_policy") == "disabled":
+        migrated["update_policy"] = "manual"
+    return migrated

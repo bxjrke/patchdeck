@@ -3,16 +3,96 @@ from __future__ import annotations
 import json
 import re
 import socket
+from urllib.parse import quote
 from typing import Any
 
 from .models import AdapterKind, DockerImportCandidate, ServiceConfig, UpdatePolicy
 
 DOCKER_SOCKET = "/var/run/docker.sock"
+GENERIC_ICON_SLUGS = {"docker", "linuxserver"}
 
 
 def slug(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9_-]+", "-", value.lower()).strip("-_")
     return normalized[:64] or "container"
+
+
+def icon_slug_for_service(name: str, image: str) -> str | None:
+    haystack = f"{name} {image}".lower()
+    matches = {
+        "homeassistant": ("homeassistant", "home-assistant", "homeassistant"),
+        "adguard": ("adguard", "adguardhome", "adguard"),
+        "infisical": ("infisical",),
+        "bazarr": ("bazarr",),
+        "filebrowser": ("filebrowser", "file-browser", "file browser"),
+        "jellyfin": ("jellyfin",),
+        "jellyseerr": ("jellyseerr",),
+        "radarr": ("radarr",),
+        "sonarr": ("sonarr",),
+        "prowlarr": ("prowlarr",),
+        "lidarr": ("lidarr",),
+        "qbittorrent": ("qbittorrent", "qbit"),
+        "sabnzbd": ("sabnzbd",),
+        "portainer": ("portainer",),
+        "vaultwarden": ("vaultwarden", "bitwarden"),
+        "paperless-ngx": ("paperless", "paperless-ngx"),
+        "immich": ("immich",),
+        "nextcloud": ("nextcloud",),
+        "uptime-kuma": ("uptime-kuma", "uptimekuma"),
+        "docker": ("docker",),
+        "linuxserver": ("linuxserver",),
+        "watchtower": ("watchtower",),
+        "nginx": ("nginx",),
+        "postgresql": ("postgres", "postgresql"),
+        "mariadb": ("mariadb",),
+        "redis": ("redis",),
+        "grafana": ("grafana",),
+        "prometheus": ("prometheus",),
+    }
+    for icon_slug, needles in matches.items():
+        if any(needle in haystack for needle in needles):
+            return icon_slug
+    return None
+
+
+def preferred_icon_slug(base: ServiceConfig | None, detected: str | None) -> str | None:
+    existing = base.icon_slug if base else None
+    if detected and (not existing or existing in GENERIC_ICON_SLUGS):
+        return detected
+    return existing or detected
+
+
+def service_from_container(container: str, base: ServiceConfig | None = None, socket_path: str = DOCKER_SOCKET) -> ServiceConfig:
+    details = docker_get(f"/containers/{quote(container, safe='')}/json", socket_path=socket_path)
+    name = str(details.get("Name") or container).lstrip("/") or container
+    config = details.get("Config") or {}
+    labels = config.get("Labels") or {}
+    image = str(config.get("Image") or details.get("Image") or "")
+    compose_service = labels.get("com.docker.compose.service")
+    compose_file = labels.get("com.docker.compose.project.config_files")
+    compose_project_dir = labels.get("com.docker.compose.project.working_dir")
+    service_id = base.id if base else slug(compose_service or name)
+    display_name = (compose_service or name).replace("-", " ").replace("_", " ").title()
+    detected_icon = icon_slug_for_service(compose_service or name, image)
+    return ServiceConfig(
+        id=service_id,
+        name=(base.name if base and base.name else display_name),
+        adapter=base.adapter if base else AdapterKind.DOCKER,
+        enabled=True if base is None else base.enabled,
+        update_policy=base.update_policy if base else UpdatePolicy.DISABLED,
+        description=base.description if base else None,
+        logo_url=base.logo_url if base else None,
+        icon_slug=preferred_icon_slug(base, detected_icon),
+        container=name,
+        image=image,
+        repo=base.repo if base else None,
+        compose_file=compose_file or (base.compose_file if base else None),
+        compose_project_dir=compose_project_dir or (base.compose_project_dir if base else None),
+        compose_service=compose_service or (base.compose_service if base else None),
+        release_notes=base.release_notes if base else None,
+        update_enabled=base.update_enabled if base else False,
+        metadata=base.metadata if base else {},
+    )
 
 
 def docker_get(path: str, socket_path: str = DOCKER_SOCKET) -> Any:
@@ -74,6 +154,8 @@ def list_container_candidates(configured_ids: set[str], socket_path: str = DOCKE
         labels = item.get("Labels") or {}
         compose_project = labels.get("com.docker.compose.project")
         compose_service = labels.get("com.docker.compose.service")
+        compose_file = labels.get("com.docker.compose.project.config_files")
+        compose_project_dir = labels.get("com.docker.compose.project.working_dir")
         service_id = slug(compose_service or name)
         image = str(item.get("Image") or "")
         service = ServiceConfig(
@@ -82,12 +164,22 @@ def list_container_candidates(configured_ids: set[str], socket_path: str = DOCKE
             adapter=AdapterKind.DOCKER,
             enabled=True,
             update_policy=UpdatePolicy.DISABLED,
+            container=name,
+            image=image,
+            icon_slug=icon_slug_for_service(compose_service or name, image),
+            compose_file=compose_file,
+            compose_project_dir=compose_project_dir,
+            compose_service=compose_service,
+            update_enabled=True,
             metadata={
                 "container": name,
                 "image": image,
+                "icon_slug": icon_slug_for_service(compose_service or name, image),
                 "compose_project": compose_project,
+                "compose_file": compose_file,
+                "compose_project_dir": compose_project_dir,
                 "compose_service": compose_service,
-                "update_action_enabled": False,
+                "update_action_enabled": True,
             },
         )
         candidates.append(

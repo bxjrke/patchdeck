@@ -9,43 +9,51 @@
 
 ## Milestone 1: Configurable Core
 
-- [ ] Persistent settings store.
-- [ ] CRUD API for services.
-- [ ] Web UI for service configuration.
-- [ ] Web UI for global settings.
-- [ ] Basic audit log.
+- [x] Persistent settings store.
+- [x] CRUD API for services.
+- [x] Web UI for service configuration.
+- [x] Web UI for global settings.
+- [x] Autosave for global and service settings.
+- [x] Basic audit log.
 
 ## Milestone 2: Docker Import
 
-- [ ] Docker API client.
-- [ ] Auto-import running containers.
-- [ ] Detect Compose project/service labels.
-- [ ] Let users accept/reject imported services.
-- [ ] Store image, container, compose project, and update policy metadata.
+- [x] Docker API client.
+- [x] Manual import of Docker containers.
+- [x] Detect Compose project/service labels.
+- [x] Let users accept imported services.
+- [x] Store image, container, compose project, compose file, service name, and update metadata.
+- [x] Cache detected service icons locally.
 
 ## Milestone 3: MQTT / Home Assistant
 
-- [ ] MQTT settings UI.
-- [ ] Home Assistant MQTT discovery for update entities.
-- [ ] Publish installed/latest version state.
-- [ ] Publish release URL and JSON attributes.
-- [ ] Support install command through MQTT only when explicitly enabled.
+- [x] MQTT settings UI.
+- [x] Home Assistant MQTT discovery for update entities.
+- [x] Publish installed/latest version state.
+- [x] Publish release URL and JSON attributes.
+- [x] Support install command through MQTT only when explicitly enabled.
 
 ## Milestone 4: Update Execution
 
-- [ ] Docker/Compose update adapter independent of Watchtower.
+- [x] Docker/Compose update adapter independent of Watchtower.
 - [ ] Dry-run/update preview.
 - [ ] Pre-update hook.
 - [ ] Post-update health check.
-- [ ] Update progress tracking.
+- [x] Update progress tracking.
 - [ ] Rollback guidance or hook support.
+
+## Release Notes
+
+- [x] Built-in Home Assistant release-notes helper.
+- [x] Custom fixed release-notes URLs per service.
+- [x] Custom URL templates with `{version}`, `{version_url}`, `{major}`, `{minor}`, and `{patch}`.
+- [ ] UI preview/test action for release-notes links.
 
 ## Later
 
-- [ ] Dark/light theme.
+- [x] Dark/light/system theme.
 - [ ] Per-user auth.
 - [ ] Notification channels.
 - [ ] Linux package update adapter.
 - [ ] Git/Compose stack update adapter.
 - [ ] Public release hardening.
-
