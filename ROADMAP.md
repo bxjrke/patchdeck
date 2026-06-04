@@ -6,7 +6,7 @@ Patchdeck is a Docker-only web UI for manually updating selected containers. It 
 
 ## Release Blockers
 
-- [ ] Make the GHCR package public and verify anonymous pulls.
+- [x] Make the GHCR package public and verify anonymous pulls.
 - [x] Fix MQTT publishing when MQTT is disabled. The UI can show MQTT as inactive while Patchdeck still publishes MQTT messages; disabled MQTT must fully suppress MQTT publishing and background MQTT behavior.
 
 ## Public Release Track
