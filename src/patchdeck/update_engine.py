@@ -161,6 +161,12 @@ class UpdateEngine:
         if code1 != 0:
             return code1, "$ " + " ".join(pull) + "\n" + out1
         self.mark_update_active(service_id, True, phase="Recreating")
+        if service_id == "patchdeck":
+            try:
+                subprocess.Popen(up, cwd=project_dir or None, env=docker_command_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except Exception as exc:
+                return 1, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + str(exc)
+            return 0, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\nSelf-update recreate started in the background."
         code2, out2 = run_cmd(up, cwd=project_dir, timeout=300)
         return code2, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2
 
@@ -379,12 +385,16 @@ def sort_statuses(statuses: list[ServiceStatus]) -> list[ServiceStatus]:
     return sorted(statuses, key=lambda service: not service.update_available)
 
 
-def run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+def docker_command_env() -> dict[str, str]:
     env = os.environ.copy()
     env["DOCKER_CONFIG"] = "/tmp/docker-empty-config"
     env["DOCKER_CLI_PLUGIN_EXTRA_DIRS"] = str(Path(COMPOSE_BIN).parent)
+    return env
+
+
+def run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
     try:
-        proc = subprocess.run(args, cwd=cwd or None, env=env, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(args, cwd=cwd or None, env=docker_command_env(), capture_output=True, text=True, timeout=timeout)
         return proc.returncode, "\n".join(part for part in [proc.stdout, proc.stderr] if part).strip()
     except Exception as exc:
         return 1, str(exc)

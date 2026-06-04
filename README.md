@@ -26,6 +26,7 @@ The recommended installation path is Docker Compose with the published container
 - Docker scan/import via the local Docker socket.
 - Docker/Compose metadata detection for container name, image, compose file, project directory, and compose service.
 - Per-service update trigger using `docker compose pull` and `docker compose up -d --no-deps`.
+- Self-update support for Patchdeck itself when it runs from Docker Compose.
 - Global update lock and last-run/audit state.
 - Local registry cache for latest-image checks.
 - Local icon cache for detected service icons.

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Patchdeck">
+  <rect width="128" height="128" rx="26" fill="#132033"/>
+  <path d="M32 30h42c18 0 31 12 31 30s-13 30-31 30H56v20H32V30Zm24 20v30h18c9 0 15-6 15-15s-6-15-15-15H56Z" fill="#7dd3fc"/>
+  <path d="M20 95h39v12H20z" fill="#16a34a"/>
+  <path d="M76 95h32v12H76z" fill="#f97316"/>
+</svg>

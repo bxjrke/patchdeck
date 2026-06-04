@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse, HTMLResponse
@@ -19,6 +20,7 @@ engine = UpdateEngine(store)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    ensure_self_service()
     engine.start_background_tasks()
     yield
 
@@ -143,6 +145,42 @@ def persist_service(service: ServiceConfig) -> ServiceConfig:
     return store.upsert_service(cache_service_icon(service, store.data_dir))
 
 
+def ensure_self_service() -> None:
+    existing = store.get_service("patchdeck")
+    container = (existing.container if existing and existing.container else "") or os.environ.get("PATCHDECK_CONTAINER") or os.environ.get("HOSTNAME") or "patchdeck"
+    base = existing or ServiceConfig(
+        id="patchdeck",
+        name="Patchdeck",
+        enabled=True,
+        update_policy="manual",
+        update_enabled=True,
+        container=container,
+        release_notes="https://github.com/bxjrke/patchdeck/releases/tag/v{version}",
+    )
+    try:
+        service = service_from_container(container, base)
+    except Exception:
+        if container == "patchdeck":
+            return
+        try:
+            service = service_from_container("patchdeck", base)
+        except Exception:
+            return
+    data = service.model_dump()
+    data.update({
+        "id": "patchdeck",
+        "name": "Patchdeck",
+        "enabled": True,
+        "update_policy": "manual",
+        "update_enabled": True,
+        "logo_url": "/static/patchdeck.svg",
+        "icon_slug": None,
+    })
+    if not data.get("release_notes"):
+        data["release_notes"] = "https://github.com/bxjrke/patchdeck/releases/tag/v{version}"
+    store.upsert_service(ServiceConfig.model_validate(data))
+
+
 def enrich_service_from_docker(service: ServiceConfig) -> ServiceConfig:
     if not service.container:
         return service
@@ -181,14 +219,18 @@ def page_html(active: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Patchdeck</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <style>{CSS}</style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Homelab Update Control</p>
-        <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
+      <div class="brand">
+        <img class="brand-logo" src="/static/patchdeck.svg" alt="" aria-hidden="true">
+        <div>
+          <p class="eyebrow">Homelab Update Control</p>
+          <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
+        </div>
       </div>
       <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i></a>
       <div class="summary">
@@ -321,6 +363,8 @@ html[data-theme="system"] { color-scheme: light dark; }
 body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
 .shell { max-width:980px; margin:0 auto; padding:34px 16px 48px; }
 .topbar { position:relative; margin-bottom:20px; padding-right:64px; }
+.brand { display:flex; align-items:center; gap:12px; min-width:0; }
+.brand-logo { width:52px; height:52px; flex:0 0 52px; border-radius:12px; display:block; }
 .eyebrow { margin:0 0 5px; color:#93c5fd; font-size:12px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
 .title-link { color:inherit; text-decoration:none; display:inline-block; }
 h1 { margin:0; font-size:clamp(34px,5vw,54px); letter-spacing:0; }

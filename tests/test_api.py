@@ -58,15 +58,18 @@ def test_html_pages() -> None:
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
     assert "Patchdeck 0.1.1" in settings_response.text
+    assert '/static/patchdeck.svg' in index_response.text
+    assert '/static/favicon.svg' in index_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
 
 
-def test_settings_icon() -> None:
-    response = client.get("/static/settings.svg")
+def test_static_icons() -> None:
+    for path in ("/static/settings.svg", "/static/patchdeck.svg", "/static/favicon.svg"):
+        response = client.get(path)
 
-    assert response.status_code == 200
-    assert "image/svg+xml" in response.headers["content-type"]
+        assert response.status_code == 200
+        assert "image/svg+xml" in response.headers["content-type"]
 
 
 def test_service_crud(tmp_path, monkeypatch) -> None:
@@ -155,6 +158,39 @@ def test_docker_import_enables_updates_by_default(monkeypatch) -> None:
     assert candidates[0].suggested_service.update_enabled is True
     assert candidates[0].suggested_service.update_policy == "disabled"
     assert candidates[0].suggested_service.icon_slug == "filebrowser"
+
+
+def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -> None:
+    test_store = use_test_store(tmp_path, monkeypatch)
+    monkeypatch.setenv("HOSTNAME", "abc123")
+
+    def fake_service_from_container(container: str, base: ServiceConfig | None = None) -> ServiceConfig:
+        assert container == "abc123"
+        assert base is not None
+        return ServiceConfig(
+            id=base.id,
+            name=base.name,
+            container="patchdeck",
+            image="ghcr.io/bxjrke/patchdeck:main",
+            compose_file="/srv/patchdeck/docker-compose.yml",
+            compose_project_dir="/srv/patchdeck",
+            compose_service="patchdeck",
+            update_enabled=base.update_enabled,
+            update_policy=base.update_policy,
+        )
+
+    monkeypatch.setattr(main, "service_from_container", fake_service_from_container)
+
+    main.ensure_self_service()
+
+    service = test_store.get_service("patchdeck")
+    assert service is not None
+    assert service.name == "Patchdeck"
+    assert service.logo_url == "/static/patchdeck.svg"
+    assert service.icon_slug is None
+    assert service.update_enabled is True
+    assert service.update_policy == "manual"
+    assert service.compose_service == "patchdeck"
 
 
 def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:
@@ -267,6 +303,39 @@ def test_status_detects_update_when_local_tag_points_to_newer_image(tmp_path, mo
     assert status.current_digest == "sha256:old"
     assert status.latest_digest == "sha256:new"
     assert status.update_available is True
+
+
+def test_patchdeck_self_update_recreate_runs_detached(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    popen_calls = []
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        assert args == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "pull", "patchdeck"]
+        assert cwd == "/srv/patchdeck"
+        return 0, "pulled"
+
+    def fake_popen(args, **kwargs):
+        popen_calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(update_engine.subprocess, "Popen", fake_popen)
+
+    code, output = engine.run_update(
+        ServiceConfig(
+            id="patchdeck",
+            name="Patchdeck",
+            compose_file="/srv/patchdeck/docker-compose.yml",
+            compose_project_dir="/srv/patchdeck",
+            compose_service="patchdeck",
+        )
+    )
+
+    assert code == 0
+    assert "Self-update recreate started" in output
+    assert popen_calls[0][0] == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "up", "-d", "--no-deps", "patchdeck"]
+    assert popen_calls[0][1]["cwd"] == "/srv/patchdeck"
+    assert popen_calls[0][1]["start_new_session"] is True
 
 
 def test_mqtt_host_env_does_not_enable_mqtt_when_disabled(monkeypatch) -> None:
