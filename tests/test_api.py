@@ -54,7 +54,7 @@ def test_html_pages() -> None:
     assert "Docker Import" in settings_response.text
     assert "The scan is always available manually" in settings_response.text
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
-    assert "Version 0.1.0" in settings_response.text
+    assert "Version 0.1.1" in settings_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
 

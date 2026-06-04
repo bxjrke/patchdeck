@@ -45,12 +45,12 @@ docker run --rm patchdeck:test python -c "from patchdeck.main import app, health
 10. Create and push a SemVer tag prefixed with `v`:
 
 ```bash
-git tag v0.1.0
+git tag v0.1.1
 git push origin main
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
-The tag push publishes `ghcr.io/bxjrke/patchdeck:0.1.0` and `ghcr.io/bxjrke/patchdeck:0.1`.
+The tag push publishes `ghcr.io/bxjrke/patchdeck:0.1.1` and `ghcr.io/bxjrke/patchdeck:0.1`.
 
 ## Workflow Behavior
 

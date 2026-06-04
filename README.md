@@ -64,7 +64,7 @@ Quick start:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.1.0
+    image: ghcr.io/bxjrke/patchdeck:0.1.1
     container_name: patchdeck
     restart: unless-stopped
     ports:
