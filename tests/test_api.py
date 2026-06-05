@@ -191,6 +191,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     assert service.update_enabled is True
     assert service.update_policy == "manual"
     assert service.compose_service == "patchdeck"
+    assert service.release_notes == "https://github.com/bxjrke/patchdeck/releases"
 
 
 def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:

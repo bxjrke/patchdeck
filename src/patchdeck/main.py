@@ -155,7 +155,7 @@ def ensure_self_service() -> None:
         update_policy="manual",
         update_enabled=True,
         container=container,
-        release_notes="https://github.com/bxjrke/patchdeck/releases/tag/v{version}",
+        release_notes="https://github.com/bxjrke/patchdeck/releases",
     )
     try:
         service = service_from_container(container, base)
@@ -176,8 +176,7 @@ def ensure_self_service() -> None:
         "logo_url": "/static/patchdeck.svg",
         "icon_slug": None,
     })
-    if not data.get("release_notes"):
-        data["release_notes"] = "https://github.com/bxjrke/patchdeck/releases/tag/v{version}"
+    data["release_notes"] = "https://github.com/bxjrke/patchdeck/releases"
     store.upsert_service(ServiceConfig.model_validate(data))
 
 
