@@ -262,6 +262,33 @@ def test_services_with_updates_are_sorted_first(tmp_path, monkeypatch) -> None:
     assert [service["service_id"] for service in status_response.json()] == ["needs-update", "stable-service"]
 
 
+def test_registry_cache_refreshes_when_local_digest_changed(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(registry_refresh_hour=23, registry_refresh_minute=59, registry_refresh_window_minutes=1))
+    engine = UpdateEngine(test_store)
+    engine.registry_cache_file.write_text(json.dumps({
+        "example/demo:latest|linux|amd64": {
+            "image": "example/demo:latest",
+            "arch": "amd64",
+            "os": "linux",
+            "label": "main",
+            "digest": "sha256:old",
+            "refresh_day": "2026-06-05",
+            "refreshed_at": 1780631276,
+        }
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(update_engine, "latest_registry_version", lambda image, audit, arch="amd64", os_name="linux": ("0.1.1", "sha256:new"))
+
+    label, digest = engine.cached_latest_image_info("example/demo:latest", "amd64", "linux", "sha256:new")
+
+    assert label == "0.1.1"
+    assert digest == "sha256:new"
+    cache = json.loads(engine.registry_cache_file.read_text(encoding="utf-8"))
+    assert cache["example/demo:latest|linux|amd64"]["label"] == "0.1.1"
+    assert cache["example/demo:latest|linux|amd64"]["digest"] == "sha256:new"
+
+
 def test_release_notes_url_templates(tmp_path, monkeypatch) -> None:
     use_test_store(tmp_path, monkeypatch)
     engine = UpdateEngine(main.store)
@@ -300,7 +327,7 @@ def test_status_detects_update_when_local_tag_points_to_newer_image(tmp_path, mo
         return 1, "unexpected command"
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux": (None, None))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None: (None, None))
 
     status = engine.service_status(ServiceConfig(id="demo", name="Demo", container="demo", image="example/demo:latest"))
 
@@ -333,7 +360,7 @@ def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch
         return 1, "unexpected command"
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux": ("0.1.1", "sha256:current"))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None: ("0.1.1", "sha256:current"))
 
     status = engine.service_status(ServiceConfig(id="patchdeck", name="Patchdeck", container="patchdeck", image="ghcr.io/bxjrke/patchdeck:main", release_notes="https://github.com/bxjrke/patchdeck/releases"))
 

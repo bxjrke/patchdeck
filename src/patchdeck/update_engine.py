@@ -81,7 +81,7 @@ class UpdateEngine:
             latest_digest = comparable_image_digest(local_latest_details, image)
             arch = (details or {}).get("Architecture") or (local_latest_details or {}).get("Architecture") or "amd64"
             os_name = (details or {}).get("Os") or (local_latest_details or {}).get("Os") or "linux"
-            remote_label, remote_digest = self.cached_latest_image_info(image, arch, os_name)
+            remote_label, remote_digest = self.cached_latest_image_info(image, arch, os_name, latest_digest)
             if remote_label:
                 latest_label = remote_label
             if remote_digest and current_repo_digest(details, image):
@@ -195,16 +195,21 @@ class UpdateEngine:
             state = self._active_updates.get(service_id)
             return dict(state) if state else None
 
-    def cached_latest_image_info(self, image: str, arch: str = "amd64", os_name: str = "linux") -> tuple[str | None, str | None]:
+    def cached_latest_image_info(self, image: str, arch: str = "amd64", os_name: str = "linux", known_local_digest: str | None = None) -> tuple[str | None, str | None]:
         settings = effective_settings(self.store.get_settings())
         cache = load_json(self.registry_cache_file, {})
         key = f"{image}|{os_name}|{arch}"
         cached = cache.get(key) if isinstance(cache, dict) else None
         today = time.strftime("%Y-%m-%d", time.localtime())
-        if isinstance(cached, dict) and cached.get("refresh_day") == today:
+        cached_digest = cached.get("digest") if isinstance(cached, dict) else None
+        cache_matches_local = bool(known_local_digest and cached_digest == known_local_digest)
+        cache_mismatches_local = bool(known_local_digest and cached_digest and cached_digest != known_local_digest)
+        if isinstance(cached, dict) and cached.get("refresh_day") == today and not cache_mismatches_local:
             return cached.get("label"), cached.get("digest")
-        if isinstance(cached, dict) and not registry_refresh_allowed(settings):
+        if isinstance(cached, dict) and not registry_refresh_allowed(settings) and not cache_mismatches_local:
             return cached.get("label"), cached.get("digest")
+        if cache_mismatches_local:
+            self.audit("registry_cache_stale", image=image, arch=arch, os=os_name, cached_digest=cached_digest, local_digest=known_local_digest)
         label, digest = latest_registry_version(image, self.audit, arch, os_name)
         if label or digest:
             if not isinstance(cache, dict):
@@ -222,7 +227,9 @@ class UpdateEngine:
             self.audit("registry_cache_refreshed", image=image, arch=arch, os=os_name, label=label, digest=digest)
             return label, digest
         self.audit("registry_cache_refresh_failed", image=image, arch=arch, os=os_name)
-        if isinstance(cached, dict):
+        if isinstance(cached, dict) and not cache_mismatches_local:
+            return cached.get("label"), cached.get("digest")
+        if cache_matches_local:
             return cached.get("label"), cached.get("digest")
         return None, None
 
