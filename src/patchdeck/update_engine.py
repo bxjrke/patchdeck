@@ -202,11 +202,15 @@ class UpdateEngine:
         cached = cache.get(key) if isinstance(cache, dict) else None
         today = time.strftime("%Y-%m-%d", time.localtime())
         cached_digest = cached.get("digest") if isinstance(cached, dict) else None
+        try:
+            refreshed_at = int(cached.get("refreshed_at") or 0) if isinstance(cached, dict) else 0
+        except (TypeError, ValueError):
+            refreshed_at = 0
+        cache_ttl_seconds = max(60, settings.update_interval_minutes * 60)
+        cache_is_fresh = bool(refreshed_at and int(time.time()) - refreshed_at < cache_ttl_seconds)
         cache_matches_local = bool(known_local_digest and cached_digest == known_local_digest)
         cache_mismatches_local = bool(known_local_digest and cached_digest and cached_digest != known_local_digest)
-        if isinstance(cached, dict) and cached.get("refresh_day") == today and not cache_mismatches_local:
-            return cached.get("label"), cached.get("digest")
-        if isinstance(cached, dict) and not registry_refresh_allowed(settings) and not cache_mismatches_local:
+        if isinstance(cached, dict) and cache_is_fresh and not cache_mismatches_local:
             return cached.get("label"), cached.get("digest")
         if cache_mismatches_local:
             self.audit("registry_cache_stale", image=image, arch=arch, os=os_name, cached_digest=cached_digest, local_digest=known_local_digest)

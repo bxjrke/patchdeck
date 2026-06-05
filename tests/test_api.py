@@ -57,10 +57,10 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.2.0" in settings_response.text
-    assert '/static/favicon.png?v0.2.0-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.2.0-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.2.0-logo4' in index_response.text
+    assert "Patchdeck 0.2.1" in settings_response.text
+    assert '/static/favicon.png?v0.2.1-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.2.1-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.2.1-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'badge-action' in index_response.text
@@ -201,7 +201,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.2.0-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.2.1-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -308,6 +308,65 @@ def test_registry_cache_refreshes_when_local_digest_changed(tmp_path, monkeypatc
     cache = json.loads(engine.registry_cache_file.read_text(encoding="utf-8"))
     assert cache["example/demo:latest|linux|amd64"]["label"] == "0.2.0"
     assert cache["example/demo:latest|linux|amd64"]["digest"] == "sha256:new"
+
+
+def test_registry_cache_refreshes_after_update_interval(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(update_interval_minutes=1))
+    engine = UpdateEngine(test_store)
+    monkeypatch.setattr(update_engine.time, "time", lambda: 1780659600)
+    engine.registry_cache_file.write_text(json.dumps({
+        "ghcr.io/bxjrke/patchdeck:main|linux|amd64": {
+            "image": "ghcr.io/bxjrke/patchdeck:main",
+            "arch": "amd64",
+            "os": "linux",
+            "label": "0.1.1",
+            "digest": "sha256:current",
+            "refresh_day": "2026-06-05",
+            "refreshed_at": 1780659300,
+        }
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(update_engine, "latest_registry_version", lambda image, audit, arch="amd64", os_name="linux": ("0.2.0", "sha256:new"))
+
+    label, digest = engine.cached_latest_image_info("ghcr.io/bxjrke/patchdeck:main", "amd64", "linux", "sha256:current")
+
+    assert label == "0.2.0"
+    assert digest == "sha256:new"
+    cache = json.loads(engine.registry_cache_file.read_text(encoding="utf-8"))
+    assert cache["ghcr.io/bxjrke/patchdeck:main|linux|amd64"]["label"] == "0.2.0"
+    assert cache["ghcr.io/bxjrke/patchdeck:main|linux|amd64"]["digest"] == "sha256:new"
+
+
+def test_registry_cache_is_reused_within_update_interval(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(update_interval_minutes=5))
+    engine = UpdateEngine(test_store)
+    monkeypatch.setattr(update_engine.time, "time", lambda: 1780659600)
+    engine.registry_cache_file.write_text(json.dumps({
+        "ghcr.io/bxjrke/patchdeck:main|linux|amd64": {
+            "image": "ghcr.io/bxjrke/patchdeck:main",
+            "arch": "amd64",
+            "os": "linux",
+            "label": "0.1.1",
+            "digest": "sha256:current",
+            "refresh_day": "2026-06-05",
+            "refreshed_at": 1780659500,
+        }
+    }), encoding="utf-8")
+    calls = []
+
+    def fake_latest_registry_version(image, audit, arch="amd64", os_name="linux"):
+        calls.append(image)
+        return "0.2.0", "sha256:new"
+
+    monkeypatch.setattr(update_engine, "latest_registry_version", fake_latest_registry_version)
+
+    label, digest = engine.cached_latest_image_info("ghcr.io/bxjrke/patchdeck:main", "amd64", "linux", "sha256:current")
+
+    assert label == "0.1.1"
+    assert digest == "sha256:current"
+    assert calls == []
 
 
 def test_release_notes_url_templates(tmp_path, monkeypatch) -> None:
