@@ -16,6 +16,9 @@ from .update_engine import UpdateEngine, mqtt_enabled, service_update_enabled
 
 store = JsonStore()
 engine = UpdateEngine(store)
+STATIC_ASSET_VERSION = f"v{__version__}-logo2"
+PATCHDECK_LOGO_URL = f"/static/patchdeck.svg?{STATIC_ASSET_VERSION}"
+PATCHDECK_FAVICON_URL = f"/static/favicon.svg?{STATIC_ASSET_VERSION}"
 
 
 @asynccontextmanager
@@ -173,7 +176,7 @@ def ensure_self_service() -> None:
         "enabled": True,
         "update_policy": "manual",
         "update_enabled": True,
-        "logo_url": "/static/patchdeck.svg",
+        "logo_url": PATCHDECK_LOGO_URL,
         "icon_slug": None,
     })
     data["release_notes"] = "https://github.com/bxjrke/patchdeck/releases"
@@ -218,14 +221,14 @@ def page_html(active: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Patchdeck</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="icon" type="image/svg+xml" href="{PATCHDECK_FAVICON_URL}">
   <style>{CSS}</style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <img class="brand-logo" src="/static/patchdeck.svg" alt="" aria-hidden="true">
+        <img class="brand-logo" src="{PATCHDECK_LOGO_URL}" alt="" aria-hidden="true">
         <div>
           <p class="eyebrow">Homelab Update Control</p>
           <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
