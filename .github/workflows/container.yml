@@ -33,6 +33,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Read project version
+        id: project
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          with open("pyproject.toml", "rb") as handle:
+              print(f"version={tomllib.load(handle)['project']['version']}")
+          PY
+
       - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -51,6 +60,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.project.outputs.version }}
+            io.patchdeck.version=${{ steps.project.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

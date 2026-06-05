@@ -227,13 +227,16 @@ class UpdateEngine:
         return None, None
 
     def release_notes_url(self, source: str | None, version: str | None) -> str | None:
-        if not source or not version:
+        if not source:
             return None
         source = source.strip()
         if source == "homeassistant":
-            return self.homeassistant_release_notes_url(version)
+            return self.homeassistant_release_notes_url(version) if version else None
         if source.startswith(("https://", "http://")):
-            return format_release_notes_url(source, version)
+            if version:
+                return format_release_notes_url(source, version)
+            if "{" not in source and "}" not in source:
+                return source
         return None
 
     def homeassistant_release_notes_url(self, version: str) -> str | None:
@@ -466,7 +469,7 @@ def comparable_image_digest(details: dict[str, Any] | None, image: str) -> str |
 
 
 def label_version(labels: dict[str, str]) -> str | None:
-    return labels.get("io.hass.version") or labels.get("org.opencontainers.image.version")
+    return labels.get("io.hass.version") or labels.get("io.patchdeck.version") or labels.get("org.opencontainers.image.version")
 
 
 def docker_container_state(container: str) -> str:

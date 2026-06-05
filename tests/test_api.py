@@ -58,8 +58,12 @@ def test_html_pages() -> None:
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
     assert "Patchdeck 0.1.1" in settings_response.text
-    assert '/static/patchdeck.svg' in index_response.text
-    assert '/static/favicon.svg' in index_response.text
+    assert '/static/patchdeck.svg?v0.1.1-logo3' in index_response.text
+    assert '/static/favicon.svg?v0.1.1-logo3' in index_response.text
+    assert 'badge-action' in index_response.text
+    assert 'version-link' in index_response.text
+    assert 'Release Notes</a>' not in index_response.text
+    assert 'repullCurrent' not in index_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
 
@@ -186,7 +190,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg"
+    assert service.logo_url == "/static/patchdeck.svg?v0.1.1-logo3"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -266,6 +270,7 @@ def test_release_notes_url_templates(tmp_path, monkeypatch) -> None:
     assert format_release_notes_url("https://example.test/{major}/{minor}/{patch}", "1.2.3") == "https://example.test/1/2/3"
     assert engine.release_notes_url("https://example.test/releases/{version_url}", "2026.6 beta") == "https://example.test/releases/2026.6%20beta"
     assert engine.release_notes_url("https://example.test/changelog", "1.2.3") == "https://example.test/changelog"
+    assert engine.release_notes_url("https://example.test/changelog", None) == "https://example.test/changelog"
     assert engine.release_notes_url("unsupported", "1.2.3") is None
 
 
@@ -304,6 +309,37 @@ def test_status_detects_update_when_local_tag_points_to_newer_image(tmp_path, mo
     assert status.current_digest == "sha256:old"
     assert status.latest_digest == "sha256:new"
     assert status.update_available is True
+
+
+
+def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch) -> None:
+    test_store = use_test_store(tmp_path, monkeypatch)
+    engine = UpdateEngine(test_store)
+    image_details = {
+        "Id": "sha256:current",
+        "RepoDigests": ["ghcr.io/bxjrke/patchdeck@sha256:current"],
+        "Config": {"Labels": {"org.opencontainers.image.version": "0.1.1"}},
+    }
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        if args == [update_engine.DOCKER_BIN, "inspect", "patchdeck", "--format", "{{.Image}}"]:
+            return 0, "sha256:current"
+        if args == [update_engine.DOCKER_BIN, "image", "inspect", "sha256:current"]:
+            return 0, json.dumps([image_details])
+        if args == [update_engine.DOCKER_BIN, "image", "inspect", "ghcr.io/bxjrke/patchdeck:main"]:
+            return 0, json.dumps([image_details])
+        if args == [update_engine.DOCKER_BIN, "inspect", "patchdeck", "--format", "{{.State.Status}}"]:
+            return 0, "running"
+        return 1, "unexpected command"
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux": ("0.1.1", "sha256:current"))
+
+    status = engine.service_status(ServiceConfig(id="patchdeck", name="Patchdeck", container="patchdeck", image="ghcr.io/bxjrke/patchdeck:main", release_notes="https://github.com/bxjrke/patchdeck/releases"))
+
+    assert status.current_version == "0.1.1"
+    assert status.latest_version == "0.1.1"
+    assert status.release_notes_url == "https://github.com/bxjrke/patchdeck/releases"
 
 
 def test_patchdeck_self_update_recreate_runs_detached(tmp_path, monkeypatch) -> None:
@@ -436,3 +472,12 @@ def test_settings_roundtrip() -> None:
     assert get_response.status_code == 200
     assert get_response.json()["theme"] == "dark"
     assert get_response.json()["language"] == "en"
+
+
+def test_container_workflow_overrides_branch_version_label() -> None:
+    workflow = Path(".github/workflows/container.yml").read_text(encoding="utf-8")
+
+    assert "Read project version" in workflow
+    assert "pyproject.toml" in workflow
+    assert "org.opencontainers.image.version=${{ steps.project.outputs.version }}" in workflow
+    assert "io.patchdeck.version=${{ steps.project.outputs.version }}" in workflow
