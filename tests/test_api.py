@@ -57,9 +57,12 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.1.1" in settings_response.text
-    assert '/static/patchdeck.svg?v0.1.1-logo3' in index_response.text
-    assert '/static/favicon.svg?v0.1.1-logo3' in index_response.text
+    assert "Patchdeck 0.2.0" in settings_response.text
+    assert '/static/favicon.png?v0.2.0-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.2.0-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.2.0-logo4' in index_response.text
+    assert '<img class="brand-logo"' not in index_response.text
+    assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'badge-action' in index_response.text
     assert 'version-link' in index_response.text
     assert 'Release Notes</a>' not in index_response.text
@@ -74,6 +77,14 @@ def test_static_icons() -> None:
 
         assert response.status_code == 200
         assert "image/svg+xml" in response.headers["content-type"]
+
+
+def test_png_favicons() -> None:
+    for path in ("/static/favicon.png", "/static/apple-touch-icon.png"):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert "image/png" in response.headers["content-type"]
 
 
 def test_service_crud(tmp_path, monkeypatch) -> None:
@@ -190,12 +201,22 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.1.1-logo3"
+    assert service.logo_url == "/static/patchdeck.svg?v0.2.0-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
     assert service.compose_service == "patchdeck"
     assert service.release_notes == "https://github.com/bxjrke/patchdeck/releases"
+
+
+def test_patchdeck_service_cannot_be_deleted(tmp_path, monkeypatch) -> None:
+    test_store = use_test_store(tmp_path, monkeypatch)
+    test_store.upsert_service(ServiceConfig(id="patchdeck", name="Patchdeck"))
+
+    response = client.delete("/api/services/patchdeck")
+
+    assert response.status_code == 403
+    assert test_store.get_service("patchdeck") is not None
 
 
 def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:
@@ -278,14 +299,14 @@ def test_registry_cache_refreshes_when_local_digest_changed(tmp_path, monkeypatc
         }
     }), encoding="utf-8")
 
-    monkeypatch.setattr(update_engine, "latest_registry_version", lambda image, audit, arch="amd64", os_name="linux": ("0.1.1", "sha256:new"))
+    monkeypatch.setattr(update_engine, "latest_registry_version", lambda image, audit, arch="amd64", os_name="linux": ("0.2.0", "sha256:new"))
 
     label, digest = engine.cached_latest_image_info("example/demo:latest", "amd64", "linux", "sha256:new")
 
-    assert label == "0.1.1"
+    assert label == "0.2.0"
     assert digest == "sha256:new"
     cache = json.loads(engine.registry_cache_file.read_text(encoding="utf-8"))
-    assert cache["example/demo:latest|linux|amd64"]["label"] == "0.1.1"
+    assert cache["example/demo:latest|linux|amd64"]["label"] == "0.2.0"
     assert cache["example/demo:latest|linux|amd64"]["digest"] == "sha256:new"
 
 
@@ -345,7 +366,7 @@ def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch
     image_details = {
         "Id": "sha256:current",
         "RepoDigests": ["ghcr.io/bxjrke/patchdeck@sha256:current"],
-        "Config": {"Labels": {"org.opencontainers.image.version": "0.1.1"}},
+        "Config": {"Labels": {"org.opencontainers.image.version": "0.2.0"}},
     }
 
     def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
@@ -360,12 +381,12 @@ def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch
         return 1, "unexpected command"
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None: ("0.1.1", "sha256:current"))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None: ("0.2.0", "sha256:current"))
 
     status = engine.service_status(ServiceConfig(id="patchdeck", name="Patchdeck", container="patchdeck", image="ghcr.io/bxjrke/patchdeck:main", release_notes="https://github.com/bxjrke/patchdeck/releases"))
 
-    assert status.current_version == "0.1.1"
-    assert status.latest_version == "0.1.1"
+    assert status.current_version == "0.2.0"
+    assert status.latest_version == "0.2.0"
     assert status.release_notes_url == "https://github.com/bxjrke/patchdeck/releases"
 
 

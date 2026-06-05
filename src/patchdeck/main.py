@@ -16,9 +16,11 @@ from .update_engine import UpdateEngine, mqtt_enabled, service_update_enabled
 
 store = JsonStore()
 engine = UpdateEngine(store)
-STATIC_ASSET_VERSION = f"v{__version__}-logo3"
+STATIC_ASSET_VERSION = f"v{__version__}-logo4"
 PATCHDECK_LOGO_URL = f"/static/patchdeck.svg?{STATIC_ASSET_VERSION}"
-PATCHDECK_FAVICON_URL = f"/static/favicon.svg?{STATIC_ASSET_VERSION}"
+PATCHDECK_SVG_FAVICON_URL = f"/static/favicon.svg?{STATIC_ASSET_VERSION}"
+PATCHDECK_FAVICON_URL = f"/static/favicon.png?{STATIC_ASSET_VERSION}"
+PATCHDECK_APPLE_ICON_URL = f"/static/apple-touch-icon.png?{STATIC_ASSET_VERSION}"
 
 
 @asynccontextmanager
@@ -77,6 +79,8 @@ def put_service(service_id: str, service: ServiceConfig) -> ServiceConfig:
 
 @app.delete("/api/services/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_service(service_id: str) -> Response:
+    if service_id == "patchdeck":
+        raise HTTPException(status_code=403, detail="patchdeck service cannot be deleted")
     deleted = store.delete_service(service_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="service not found")
@@ -221,20 +225,21 @@ def page_html(active: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Patchdeck</title>
-  <link rel="icon" type="image/svg+xml" href="{PATCHDECK_FAVICON_URL}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{PATCHDECK_FAVICON_URL}">
+  <link rel="icon" type="image/svg+xml" href="{PATCHDECK_SVG_FAVICON_URL}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{PATCHDECK_APPLE_ICON_URL}">
   <style>{CSS}</style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <img class="brand-logo" src="{PATCHDECK_LOGO_URL}" alt="" aria-hidden="true">
         <div>
           <p class="eyebrow">Homelab Update Control</p>
           <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
         </div>
       </div>
-      <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i></a>
+      <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i><span data-i18n="settings">Settings</span></a>
       <div class="summary">
         <span id="summary-services">0 services</span>
         <span id="summary-state">Ready</span>
@@ -364,15 +369,15 @@ html[data-theme="system"] { color-scheme: light dark; }
 * { box-sizing:border-box; }
 body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
 .shell { max-width:980px; margin:0 auto; padding:34px 16px 48px; }
-.topbar { position:relative; margin-bottom:20px; padding-right:64px; }
+.topbar { position:relative; margin-bottom:20px; padding-right:160px; }
 .brand { display:flex; align-items:center; gap:12px; min-width:0; }
-.brand-logo { width:52px; height:52px; flex:0 0 52px; border-radius:12px; display:block; }
 .eyebrow { margin:0 0 5px; color:#93c5fd; font-size:12px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
 .title-link { color:inherit; text-decoration:none; display:inline-block; }
 h1 { margin:0; font-size:clamp(34px,5vw,54px); letter-spacing:0; }
 h2 { margin:0; font-size:22px; letter-spacing:0; overflow-wrap:anywhere; }
 p { margin:6px 0 0; color:var(--muted); }
-.settings-link { position:absolute; top:50%; right:0; transform:translateY(-50%); width:46px; height:46px; display:grid; place-items:center; border-radius:50%; color:var(--text); background:var(--field); border:1px solid var(--line); text-decoration:none; box-shadow:0 8px 24px #0002; }
+.settings-link { position:absolute; top:50%; right:0; transform:translateY(-50%); min-height:42px; padding:9px 12px; display:inline-flex; align-items:center; gap:8px; border-radius:999px; color:var(--text); background:var(--field); border:1px solid var(--line); text-decoration:none; box-shadow:0 8px 24px #0002; font-weight:800; font-size:13px; }
+.settings-link span { margin:0; color:inherit; font-size:13px; }
 .icon-button svg, button svg, .logo svg { width:20px; height:20px; display:block; flex:0 0 auto; }
 .settings-link:hover { filter:brightness(1.12); }
 .summary { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
@@ -457,7 +462,8 @@ details.service-config summary::-webkit-details-marker { display:none; }
 .version { font-weight:800; white-space:nowrap; }
 [hidden] { display:none !important; }
 @media (max-width:760px) {
-  .topbar { padding-right:56px; }
+  .topbar { padding-right:0; }
+  .settings-link { position:static; transform:none; margin-top:14px; }
   .card-head { align-items:flex-start; flex-direction:column; }
   .identity { gap:10px; }
   .logo { width:38px; height:38px; flex-basis:38px; }
@@ -754,7 +760,7 @@ function serviceDetails(service) {
       '<div class="identity">' + logoHtml(service) + '<span class="summary-title"><strong>' + esc(service.name) + '</strong><span>' + esc(service.id) + '</span></span></div>' +
       '<div class="service-actions">' +
         '<button type="button" class="secondary icon-only service-settings-toggle" data-i18n-title="edit" title="' + esc(tr('edit')) + '" aria-expanded="false" onclick="toggleServiceSettings(\'' + esc(service.id) + '\')"><i data-lucide="settings" aria-hidden="true"></i></button>' +
-        '<button type="button" class="danger icon-only" data-i18n-title="delete" title="' + esc(tr('delete')) + '" onclick="deleteService(\'' + esc(service.id) + '\')"><i data-lucide="trash-2" aria-hidden="true"></i></button>' +
+        '<button type="button" class="danger icon-only" data-i18n-title="delete" title="' + esc(tr('delete')) + '" onclick="deleteService(\'' + esc(service.id) + '\')" ' + (service.id === 'patchdeck' ? 'disabled aria-disabled="true"' : '') + '><i data-lucide="trash-2" aria-hidden="true"></i></button>' +
       '</div>' +
     '</div>' +
     '<div class="details-body" hidden>' +
