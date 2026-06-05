@@ -242,7 +242,7 @@ def page_html(active: str) -> str:
       <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i><span data-i18n="settings">Settings</span></a>
       <div class="summary">
         <span id="summary-services">0 services</span>
-        <span id="summary-state">Ready</span>
+        <button type="button" id="refresh-status" class="badge badge-action neutral" onclick="refreshAllServices()"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
     </header>
 
@@ -397,9 +397,13 @@ p { margin:6px 0 0; color:var(--muted); }
 .badge.ok { color:var(--badge-ok-text); background:var(--badge-ok-bg); border-color:var(--badge-ok-border); }
 .badge.warn { color:var(--badge-warn-text); background:var(--badge-warn-bg); border-color:var(--badge-warn-border); }
 .badge.update, .badge.progress { color:var(--badge-update-text); background:var(--badge-update-bg); border-color:var(--badge-update-border); }
+.badge.neutral { color:var(--muted); background:var(--field); border-color:var(--line); }
+.badge svg { width:14px; height:14px; display:block; flex:0 0 auto; }
 .badge-action { appearance:none; cursor:pointer; box-shadow:none; min-height:0; }
 .badge-action:hover { filter:brightness(1.06); }
+.badge-action:disabled { cursor:not-allowed; opacity:.75; }
 .spinner { width:12px; height:12px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
+.spin-icon svg { animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:12px; }
 .grid div, label { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:10px; min-width:0; }
@@ -489,7 +493,7 @@ const I18N = {
     container: 'Container Name', image: 'Image', composeFile: 'Compose-Datei', composeProject: 'Compose Projektordner', composeService: 'Compose Service', iconSlug: 'Icon-Name', iconPath: 'Icon Pfad', iconHelpTitle: 'Icons', iconHelp: 'Patchdeck erkennt Icons automatisch aus Container und Image und speichert gefundene Dateien lokal. Bei Bedarf kann ein Icon Pfad gesetzt werden.', releaseNotesField: 'Release Notes Quelle',
     releaseNotesHelp: 'Optional. Nutze homeassistant für die eingebaute Home-Assistant-Erkennung oder trage eine URL ein. In URLs kann {version} durch die gefundene Version ersetzt werden.',
     saveService: 'Dienst speichern', dockerImport: 'Docker Import', dockerImportIntro: 'Der Scan ist immer manuell möglich. Patchdeck liest Container, Image und Compose-Labels nur aus und legt erst nach Klick auf Import einen Dienst an.', scanDocker: 'Docker scannen', dockerScanStart: 'Docker Scan starten, um Container zu importieren.',
-    loadingServices: 'Lade Dienste...', noServices: 'Noch keine Dienste konfiguriert.', settings: 'Einstellungen', overview: 'Übersicht', releaseNotes: 'Release Notes', installed: 'Installiert', available: 'Verfügbar', notChecked: 'Noch nicht geprüft', updateRunning: 'Update läuft', incomplete: 'Unvollständig', updateAvailable: 'Update verfügbar', upToDate: 'Aktuell', startUpdate: 'Update starten', lastUpdate: 'Letztes Update', success: 'Erfolg', error: 'Fehler', updateStarting: 'Update wird gestartet', updateAllowed: 'Update erlaubt', save: 'Speichern', delete: 'Löschen', add: 'Hinzufügen', edit: 'Einstellungen öffnen', refresh: 'Aus Docker aktualisieren', technicalDetails: 'Erkannte Docker-Details',
+    loadingServices: 'Lade Dienste...', noServices: 'Noch keine Dienste konfiguriert.', settings: 'Einstellungen', overview: 'Übersicht', refreshUpdates: 'Aktualisieren', refreshRunning: 'Aktualisiere', releaseNotes: 'Release Notes', installed: 'Installiert', available: 'Verfügbar', notChecked: 'Noch nicht geprüft', updateRunning: 'Update läuft', incomplete: 'Unvollständig', updateAvailable: 'Update verfügbar', upToDate: 'Aktuell', startUpdate: 'Update starten', lastUpdate: 'Letztes Update', success: 'Erfolg', error: 'Fehler', updateStarting: 'Update wird gestartet', updateAllowed: 'Update erlaubt', save: 'Speichern', delete: 'Löschen', add: 'Hinzufügen', edit: 'Einstellungen öffnen', refresh: 'Aus Docker aktualisieren', technicalDetails: 'Erkannte Docker-Details',
     active: 'Aktiv', inactive: 'Inaktiv', dockerScanning: 'Docker wird gescannt...', dockerScanFailed: 'Docker Scan fehlgeschlagen.', dockerCandidates: ' Docker Kandidaten', noContainers: 'Keine Docker Container gefunden.', compose: 'Compose', imported: 'Importiert', import: 'Import'
   },
   en: {
@@ -501,7 +505,7 @@ const I18N = {
     container: 'Container name', image: 'Image', composeFile: 'Compose file', composeProject: 'Compose project folder', composeService: 'Compose service', iconSlug: 'Icon name', iconPath: 'Icon path', iconHelpTitle: 'Icons', iconHelp: 'Patchdeck detects icons from container and image automatically and stores found files locally. Set an icon path when you want to override it.', releaseNotesField: 'Release notes source',
     releaseNotesHelp: 'Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.',
     saveService: 'Save service', dockerImport: 'Docker import', dockerImportIntro: 'The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.', scanDocker: 'Scan Docker', dockerScanStart: 'Start a Docker scan to import containers.',
-    loadingServices: 'Loading services...', noServices: 'No services configured yet.', settings: 'Settings', overview: 'Overview', releaseNotes: 'Release notes', installed: 'Installed', available: 'Available', notChecked: 'Not checked yet', updateRunning: 'Update running', incomplete: 'Incomplete', updateAvailable: 'Update available', upToDate: 'Up to date', startUpdate: 'Start update', lastUpdate: 'Last update', success: 'Success', error: 'Error', updateStarting: 'Starting update', updateAllowed: 'Updates allowed', save: 'Save', delete: 'Delete', add: 'Add', edit: 'Open settings', refresh: 'Refresh from Docker', technicalDetails: 'Detected Docker details',
+    loadingServices: 'Loading services...', noServices: 'No services configured yet.', settings: 'Settings', overview: 'Overview', refreshUpdates: 'Refresh', refreshRunning: 'Refreshing', releaseNotes: 'Release notes', installed: 'Installed', available: 'Available', notChecked: 'Not checked yet', updateRunning: 'Update running', incomplete: 'Incomplete', updateAvailable: 'Update available', upToDate: 'Up to date', startUpdate: 'Start update', lastUpdate: 'Last update', success: 'Success', error: 'Error', updateStarting: 'Starting update', updateAllowed: 'Updates allowed', save: 'Save', delete: 'Delete', add: 'Add', edit: 'Open settings', refresh: 'Refresh from Docker', technicalDetails: 'Detected Docker details',
     active: 'Active', inactive: 'Inactive', dockerScanning: 'Scanning Docker...', dockerScanFailed: 'Docker scan failed.', dockerCandidates: ' Docker candidates', noContainers: 'No Docker containers found.', compose: 'Compose', imported: 'Imported', import: 'Import'
   }
 };
@@ -531,6 +535,31 @@ async function getServices() {
   const services = await (await api('/api/services')).json();
   document.querySelector('#summary-services').textContent = serviceCountText(services.length);
   return services;
+}
+
+async function refreshAllServices() {
+  const badge = document.querySelector('#refresh-status');
+  if (badge) {
+    badge.disabled = true;
+    badge.classList.add('spin-icon');
+    badge.innerHTML = '<i data-lucide="refresh-cw" aria-hidden="true"></i><span>' + esc(tr('refreshRunning')) + '</span>';
+    refreshIcons();
+  }
+  try {
+    const response = await api('/api/status');
+    const statuses = await response.json();
+    document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
+    if (typeof renderServiceCards === 'function') {
+      renderServiceCards(statuses);
+    }
+  } finally {
+    if (badge) {
+      badge.disabled = false;
+      badge.classList.remove('spin-icon');
+      badge.innerHTML = '<i data-lucide="refresh-cw" aria-hidden="true"></i><span>' + esc(tr('refreshUpdates')) + '</span>';
+      refreshIcons();
+    }
+  }
 }
 
 async function loadLanguagePreference() {
@@ -570,7 +599,6 @@ async function loadHome() {
 
 function renderServiceCards(statuses) {
   const target = document.querySelector('#services');
-  document.querySelector('#summary-state').textContent = tr('overview');
   if (!statuses.length) {
     target.innerHTML = '<section class="card"><div class="notice">' + esc(tr('noServices')) + '</div></section>';
     return;
@@ -579,7 +607,8 @@ function renderServiceCards(statuses) {
     const incomplete = !service.latest_version;
     const badgeClass = service.update_in_progress ? 'progress' : (incomplete ? 'warn' : (service.update_available ? 'update' : 'ok'));
     const badgeLabel = service.update_in_progress ? tr('updateRunning') : (service.update_available ? tr('startUpdate') : (incomplete ? tr('incomplete') : tr('upToDate')));
-    const badgeContent = (service.update_in_progress ? '<span class="spinner" aria-hidden="true"></span>' : '') + '<span>' + esc(badgeLabel) + '</span>';
+    const badgeIcon = service.update_in_progress ? '<span class="spinner" aria-hidden="true"></span>' : '<i data-lucide="' + (service.update_available ? 'download' : (incomplete ? 'circle-alert' : 'check')) + '" aria-hidden="true"></i>';
+    const badgeContent = badgeIcon + '<span>' + esc(badgeLabel) + '</span>';
     const badge = service.update_available && service.update_enabled && !service.update_in_progress
       ? '<button type="button" class="badge badge-action ' + badgeClass + '" onclick="runUpdate(\'' + esc(service.service_id) + '\')">' + badgeContent + '</button>'
       : '<span class="badge ' + badgeClass + '">' + badgeContent + '</span>';
@@ -667,7 +696,6 @@ async function loadSettings() {
   applyTheme(data.theme);
   applyI18n();
   await getServices();
-  document.querySelector('#summary-state').textContent = tr('settings');
   document.querySelector('#update-interval').value = data.update_interval_minutes;
   document.querySelector('#language').value = currentLanguage;
   document.querySelector('#mqtt-enabled').checked = Boolean(data.mqtt_enabled);
@@ -896,7 +924,6 @@ async function loadDockerCandidates() {
     return;
   }
   const candidates = await response.json();
-  document.querySelector('#summary-state').textContent = candidates.length + tr('dockerCandidates');
   if (!candidates.length) {
     target.textContent = tr('noContainers');
     return;
