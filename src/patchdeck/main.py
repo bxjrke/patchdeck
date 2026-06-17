@@ -234,15 +234,15 @@ def page_html(active: str) -> str:
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <div>
-          <p class="eyebrow">Homelab Update Control</p>
+        <p class="eyebrow">Homelab Update Control</p>
+        <div class="brand-row">
           <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
+          <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i><span data-i18n="settings">Settings</span></a>
         </div>
       </div>
-      <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i><span data-i18n="settings">Settings</span></a>
-      <div class="summary">
-        <span id="summary-services">0 services</span>
-        <button type="button" id="refresh-status" class="badge badge-action neutral" onclick="refreshAllServices()"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
+      <div class="summary" aria-label="Service overview actions">
+        <span id="summary-services" class="summary-pill">0 services</span>
+        <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" onclick="refreshAllServices()" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
     </header>
 
@@ -369,19 +369,20 @@ html[data-theme="system"] { color-scheme: light dark; }
 * { box-sizing:border-box; }
 body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
 .shell { max-width:980px; margin:0 auto; padding:34px 16px 48px; }
-.topbar { position:relative; margin-bottom:20px; padding-right:160px; }
-.brand { display:flex; align-items:center; gap:12px; min-width:0; }
+.topbar { margin-bottom:20px; }
+.brand { display:grid; gap:5px; min-width:0; }
+.brand-row { display:flex; align-items:center; justify-content:space-between; gap:14px; min-width:0; }
 .eyebrow { margin:0 0 5px; color:#93c5fd; font-size:12px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
 .title-link { color:inherit; text-decoration:none; display:inline-block; }
 h1 { margin:0; font-size:clamp(34px,5vw,54px); letter-spacing:0; }
 h2 { margin:0; font-size:22px; letter-spacing:0; overflow-wrap:anywhere; }
 p { margin:6px 0 0; color:var(--muted); }
-.settings-link { position:absolute; top:50%; right:0; transform:translateY(-50%); min-height:42px; padding:9px 12px; display:inline-flex; align-items:center; gap:8px; border-radius:999px; color:var(--text); background:var(--field); border:1px solid var(--line); text-decoration:none; box-shadow:0 8px 24px #0002; font-weight:800; font-size:13px; }
+.settings-link { min-height:42px; padding:9px 12px; display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:999px; color:var(--text); background:var(--field); border:1px solid var(--line); text-decoration:none; box-shadow:0 8px 24px #0002; font-weight:800; font-size:13px; flex:0 0 auto; }
 .settings-link span { margin:0; color:inherit; font-size:13px; }
 .icon-button svg, button svg, .logo svg { width:20px; height:20px; display:block; flex:0 0 auto; }
 .settings-link:hover { filter:brightness(1.12); }
-.summary { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
-.summary span { display:inline-flex; margin:0; padding:7px 10px; border:1px solid var(--line); border-radius:999px; background:var(--field); color:var(--muted); font-weight:800; font-size:12px; }
+.summary { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:18px; }
+.summary-pill { min-height:42px; display:inline-flex; align-items:center; justify-content:center; margin:0; padding:9px 13px; border:1px solid var(--line); border-radius:999px; background:var(--field); color:var(--muted); box-shadow:0 8px 24px #0002; font-weight:800; font-size:13px; line-height:1.1; text-align:center; }
 .stack, .details-stack { display:grid; gap:10px; }
 .card { background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line); border-radius:8px; padding:14px; box-shadow:0 12px 34px #0002; margin:10px 0; }
 .compact-card { padding:12px 14px; }
@@ -402,6 +403,10 @@ p { margin:6px 0 0; color:var(--muted); }
 .badge-action { appearance:none; cursor:pointer; box-shadow:none; min-height:0; }
 .badge-action:hover { filter:brightness(1.06); }
 .badge-action:disabled { cursor:not-allowed; opacity:.75; }
+.summary-action { min-height:42px; padding:9px 13px; box-shadow:0 8px 24px #0002; }
+.summary-action, .summary-action span, .summary-action svg { color:var(--text); }
+.summary-action.neutral { background:color-mix(in srgb,var(--panel2) 72%,var(--field)); border-color:var(--line); }
+.summary-action:hover { background:color-mix(in srgb,var(--panel2) 58%,var(--blue)); filter:none; }
 .spinner { width:12px; height:12px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
 .spin-icon svg { animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
@@ -466,9 +471,8 @@ details.service-config summary::-webkit-details-marker { display:none; }
 .version { font-weight:800; white-space:nowrap; }
 [hidden] { display:none !important; }
 @media (max-width:760px) {
-  .topbar { padding-right:0; }
-  .settings-link { position:static; transform:none; margin-top:14px; }
   .card-head { align-items:flex-start; flex-direction:column; }
+  .service-card-head { align-items:center; flex-direction:row; }
   .identity { gap:10px; }
   .logo { width:38px; height:38px; flex-basis:38px; }
   h2 { font-size:20px; }
@@ -606,7 +610,7 @@ function renderServiceCards(statuses) {
   target.innerHTML = statuses.map(service => {
     const incomplete = !service.latest_version;
     const badgeClass = service.update_in_progress ? 'progress' : (incomplete ? 'warn' : (service.update_available ? 'update' : 'ok'));
-    const badgeLabel = service.update_in_progress ? tr('updateRunning') : (service.update_available ? tr('startUpdate') : (incomplete ? tr('incomplete') : tr('upToDate')));
+    const badgeLabel = service.update_in_progress ? tr('updateRunning') : (service.update_available ? tr('updateAvailable') : (incomplete ? tr('incomplete') : tr('upToDate')));
     const badgeIcon = service.update_in_progress ? '<span class="spinner" aria-hidden="true"></span>' : '<i data-lucide="' + (service.update_available ? 'download' : (incomplete ? 'circle-alert' : 'check')) + '" aria-hidden="true"></i>';
     const badgeContent = badgeIcon + '<span>' + esc(badgeLabel) + '</span>';
     const badge = service.update_available && service.update_enabled && !service.update_in_progress
@@ -617,7 +621,7 @@ function renderServiceCards(statuses) {
       ? '<div class="last-run"><span>' + esc(tr('lastUpdate')) + '</span><strong>' + esc(service.last_run.ok ? tr('success') : tr('error')) + ' · ' + esc(formatTs(service.last_run.ts)) + '</strong></div>'
       : '';
     return '<section class="card" data-service="' + esc(service.id) + '">' +
-      '<div class="card-head">' +
+      '<div class="card-head service-card-head">' +
         '<div class="identity">' + logoHtml(service) + '<h2>' + esc(service.name) + '</h2></div>' +
         badge +
       '</div>' +

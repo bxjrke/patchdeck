@@ -31,6 +31,7 @@ Patchdeck is a Docker-only web UI for manually updating selected containers. It 
 - [x] Detect Compose project/service labels.
 - [x] Store image, container, compose project, compose file, service name, and update metadata.
 - [x] Trigger one selected Docker Compose service update at a time.
+- [ ] Fix Patchdeck self-update orchestration. Current self-updates can pull the new image and stop the old container, but the background `docker compose up` process may be killed with the old container before the replacement container starts, leaving the new container in `Created`.
 - [x] Global update lock and last-run/audit state.
 - [x] Cache detected service icons locally.
 
