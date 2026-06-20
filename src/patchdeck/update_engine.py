@@ -19,6 +19,7 @@ from .store import JsonStore
 
 DOCKER_BIN = os.environ.get("PATCHDECK_DOCKER_BIN", "/usr/bin/docker")
 COMPOSE_BIN = os.environ.get("PATCHDECK_COMPOSE_BIN", "/usr/libexec/docker/cli-plugins/docker-compose")
+_MQTT_UNSET = object()
 
 
 class UpdateEngine:
@@ -136,7 +137,7 @@ class UpdateEngine:
             self.save_last_run(service_id, {"ts": int(time.time()), "ok": ok, "exit_code": code, "source": source, "output": output[-2000:]})
             self.audit("update_done", service=service_id, source=source, ok=ok, exit_code=code, output=output[-1200:])
             self.mark_update_active(service_id, False)
-            self.publish_service_state(service, in_progress=False)
+            self.publish_service_state(service, in_progress=False, update_percentage=None)
             return ok, "Update completed." if ok else "Update failed. Details are available in the audit log."
 
     def run_update(self, service: ServiceConfig) -> tuple[int, str]:
@@ -303,7 +304,12 @@ class UpdateEngine:
         ok = mqtt_publish_cleanup(settings, statuses, self.audit)
         self.audit("mqtt_entities_cleared", ok=ok, count=len(statuses))
 
-    def publish_service_state(self, service: ServiceConfig, in_progress: bool | None = None, update_percentage: int | float | None = None) -> None:
+    def publish_service_state(
+        self,
+        service: ServiceConfig,
+        in_progress: bool | None = None,
+        update_percentage: int | float | None | object = _MQTT_UNSET,
+    ) -> None:
         settings = effective_settings(self.store.get_settings())
         if not mqtt_enabled(settings):
             return
@@ -648,7 +654,11 @@ def effective_settings(settings: Settings) -> Settings:
     return Settings.model_validate(data)
 
 
-def mqtt_update_state_payload(s: ServiceStatus, in_progress: bool | None = None, update_percentage: int | float | None = None) -> str:
+def mqtt_update_state_payload(
+    s: ServiceStatus,
+    in_progress: bool | None = None,
+    update_percentage: int | float | None | object = _MQTT_UNSET,
+) -> str:
     payload: dict[str, Any] = {
         "installed_version": s.current_version or "",
         "latest_version": (s.latest_version if s.update_available else s.current_version) or s.current_version or "",
@@ -659,7 +669,8 @@ def mqtt_update_state_payload(s: ServiceStatus, in_progress: bool | None = None,
     if in_progress is None:
         in_progress = bool(s.update_in_progress)
     payload["in_progress"] = bool(in_progress)
-    payload["update_percentage"] = update_percentage if update_percentage is not None else None
+    if update_percentage is not _MQTT_UNSET:
+        payload["update_percentage"] = update_percentage
     return json.dumps(payload, separators=(",", ":"))
 
 
@@ -668,7 +679,7 @@ def mqtt_publish_discovery(
     statuses: list[ServiceStatus],
     audit: Any,
     in_progress: bool | None = None,
-    update_percentage: int | float | None = None,
+    update_percentage: int | float | None | object = _MQTT_UNSET,
 ) -> None:
     if not mqtt_enabled(settings):
         return

@@ -586,6 +586,36 @@ def test_mqtt_discovery_uses_json_state_and_keeps_plain_state_compatible(monkeyp
     assert json_payload["update_percentage"] == 42
 
 
+def test_mqtt_discovery_does_not_reset_unknown_progress(monkeypatch) -> None:
+    settings = Settings(mqtt_enabled=True, mqtt_host="mosquitto")
+    status = ServiceStatus(
+        service_id="homeassistant",
+        id="homeassistant",
+        name="Home Assistant",
+        current_version="2026.6.1",
+        latest_version="2026.6.2",
+        update_available=True,
+        update_in_progress=True,
+    )
+    published = []
+
+    monkeypatch.setattr(
+        update_engine,
+        "mqtt_publish_batch",
+        lambda settings, messages, audit: published.extend(messages) or True,
+    )
+
+    mqtt_publish_discovery(settings, [status], lambda *args, **kwargs: None)
+
+    json_payload = next(
+        json.loads(payload)
+        for topic, payload, retain in published
+        if topic == "patchdeck/homeassistant/json"
+    )
+    assert json_payload["in_progress"] is True
+    assert "update_percentage" not in json_payload
+
+
 def test_update_lifecycle_publishes_mqtt_progress(tmp_path, monkeypatch) -> None:
     test_store = JsonStore(tmp_path)
     service = ServiceConfig(id="homeassistant", name="Home Assistant", update_enabled=True)
@@ -601,7 +631,7 @@ def test_update_lifecycle_publishes_mqtt_progress(tmp_path, monkeypatch) -> None
     assert message == "Update completed."
     assert published == [
         ("homeassistant", {"in_progress": True, "update_percentage": 0}),
-        ("homeassistant", {"in_progress": False}),
+        ("homeassistant", {"in_progress": False, "update_percentage": None}),
     ]
 
 
