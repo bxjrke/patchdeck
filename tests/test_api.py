@@ -75,6 +75,7 @@ def test_html_pages() -> None:
     assert 'data-lucide="refresh-cw"' in index_response.text
     assert 'data-i18n="refreshUpdates"' in index_response.text
     assert 'refreshAllServices()' in index_response.text
+    assert "api('/api/status?refresh=true')" in index_response.text
     assert 'spin-icon' in index_response.text
     assert "service.update_available ? 'download'" in index_response.text
     assert "'circle-alert' : 'check'" in index_response.text
@@ -384,6 +385,105 @@ def test_registry_cache_is_reused_within_update_interval(tmp_path, monkeypatch) 
     assert calls == []
 
 
+def test_registry_cache_force_refresh_bypasses_update_interval(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(update_interval_minutes=60))
+    engine = UpdateEngine(test_store)
+    monkeypatch.setattr(update_engine.time, "time", lambda: 1780659600)
+    engine.registry_cache_file.write_text(json.dumps({
+        "ghcr.io/bxjrke/patchdeck:main|linux|amd64": {
+            "image": "ghcr.io/bxjrke/patchdeck:main",
+            "arch": "amd64",
+            "os": "linux",
+            "label": "0.3.1",
+            "digest": "sha256:current",
+            "refresh_day": "2026-06-05",
+            "refreshed_at": 1780659500,
+        }
+    }), encoding="utf-8")
+    calls = []
+
+    def fake_latest_registry_version(image, audit, arch="amd64", os_name="linux"):
+        calls.append(image)
+        return "0.3.2", "sha256:new"
+
+    monkeypatch.setattr(update_engine, "latest_registry_version", fake_latest_registry_version)
+
+    label, digest = engine.cached_latest_image_info(
+        "ghcr.io/bxjrke/patchdeck:main",
+        "amd64",
+        "linux",
+        "sha256:current",
+        force_refresh=True,
+    )
+
+    assert label == "0.3.2"
+    assert digest == "sha256:new"
+    assert calls == ["ghcr.io/bxjrke/patchdeck:main"]
+    cache = json.loads(engine.registry_cache_file.read_text(encoding="utf-8"))
+    assert cache["ghcr.io/bxjrke/patchdeck:main|linux|amd64"]["label"] == "0.3.2"
+    assert cache["ghcr.io/bxjrke/patchdeck:main|linux|amd64"]["digest"] == "sha256:new"
+
+
+def test_registry_cache_force_refresh_falls_back_to_cached_value(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(update_interval_minutes=60))
+    engine = UpdateEngine(test_store)
+    monkeypatch.setattr(update_engine.time, "time", lambda: 1780659600)
+    engine.registry_cache_file.write_text(json.dumps({
+        "ghcr.io/bxjrke/patchdeck:main|linux|amd64": {
+            "image": "ghcr.io/bxjrke/patchdeck:main",
+            "arch": "amd64",
+            "os": "linux",
+            "label": "0.3.1",
+            "digest": "sha256:current",
+            "refresh_day": "2026-06-05",
+            "refreshed_at": 1780659500,
+        }
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(
+        update_engine,
+        "latest_registry_version",
+        lambda image, audit, arch="amd64", os_name="linux": (None, None),
+    )
+
+    label, digest = engine.cached_latest_image_info(
+        "ghcr.io/bxjrke/patchdeck:main",
+        "amd64",
+        "linux",
+        "sha256:current",
+        force_refresh=True,
+    )
+
+    assert label == "0.3.1"
+    assert digest == "sha256:current"
+
+
+def test_status_endpoint_forwards_manual_refresh(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(main.engine, "statuses", lambda force_registry_refresh=False: calls.append(force_registry_refresh) or [])
+
+    response = client.get("/api/status?refresh=true")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    assert calls == [True]
+
+
+def test_status_endpoint_uses_normal_cache_by_default(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(main.engine, "statuses", lambda force_registry_refresh=False: calls.append(force_registry_refresh) or [])
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    assert calls == [False]
+
+
 def test_release_notes_url_templates(tmp_path, monkeypatch) -> None:
     use_test_store(tmp_path, monkeypatch)
     engine = UpdateEngine(main.store)
@@ -422,7 +522,7 @@ def test_status_detects_update_when_local_tag_points_to_newer_image(tmp_path, mo
         return 1, "unexpected command"
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None: (None, None))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None, force_refresh=False: (None, None))
 
     status = engine.service_status(ServiceConfig(id="demo", name="Demo", container="demo", image="example/demo:latest"))
 
@@ -455,7 +555,7 @@ def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch
         return 1, "unexpected command"
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None: ("0.2.0", "sha256:current"))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda image, arch="amd64", os_name="linux", known_local_digest=None, force_refresh=False: ("0.2.0", "sha256:current"))
 
     status = engine.service_status(ServiceConfig(id="patchdeck", name="Patchdeck", container="patchdeck", image="ghcr.io/bxjrke/patchdeck:main", release_notes="https://github.com/bxjrke/patchdeck/releases"))
 

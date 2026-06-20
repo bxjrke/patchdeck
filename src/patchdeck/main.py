@@ -88,8 +88,8 @@ def delete_service(service_id: str) -> Response:
 
 
 @app.get("/api/status")
-def get_status() -> list[ServiceStatus]:
-    return engine.statuses()
+def get_status(refresh: bool = False) -> list[ServiceStatus]:
+    return engine.statuses(force_registry_refresh=refresh)
 
 
 @app.post("/api/services/{service_id}/update")
@@ -550,7 +550,7 @@ async function refreshAllServices() {
     refreshIcons();
   }
   try {
-    const response = await api('/api/status');
+    const response = await api('/api/status?refresh=true');
     const statuses = await response.json();
     document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
     if (typeof renderServiceCards === 'function') {

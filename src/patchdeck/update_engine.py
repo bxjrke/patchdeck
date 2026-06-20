@@ -35,6 +35,8 @@ class UpdateEngine:
         self._active_lock = threading.Lock()
         self._mqtt_started = False
         self._mqtt_start_lock = threading.Lock()
+        self._registry_cache_lock = threading.Lock()
+        self._force_registry_refresh_lock = threading.Lock()
 
     def audit(self, event: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -42,10 +44,20 @@ class UpdateEngine:
         with self.audit_log.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
 
-    def statuses(self) -> list[ServiceStatus]:
-        return sort_statuses([self.service_status(service) for service in self.store.list_services() if service.enabled])
+    def statuses(self, force_registry_refresh: bool = False) -> list[ServiceStatus]:
+        if force_registry_refresh:
+            with self._force_registry_refresh_lock:
+                return self._statuses(force_registry_refresh=True)
+        return self._statuses()
 
-    def service_status(self, service: ServiceConfig) -> ServiceStatus:
+    def _statuses(self, force_registry_refresh: bool = False) -> list[ServiceStatus]:
+        return sort_statuses([
+            self.service_status(service, force_registry_refresh=force_registry_refresh)
+            for service in self.store.list_services()
+            if service.enabled
+        ])
+
+    def service_status(self, service: ServiceConfig, force_registry_refresh: bool = False) -> ServiceStatus:
         service_id = service.id
         mock = service.metadata.get("mock_status") if service.metadata else None
         if isinstance(mock, dict):
@@ -82,7 +94,13 @@ class UpdateEngine:
             latest_digest = comparable_image_digest(local_latest_details, image)
             arch = (details or {}).get("Architecture") or (local_latest_details or {}).get("Architecture") or "amd64"
             os_name = (details or {}).get("Os") or (local_latest_details or {}).get("Os") or "linux"
-            remote_label, remote_digest = self.cached_latest_image_info(image, arch, os_name, latest_digest)
+            remote_label, remote_digest = self.cached_latest_image_info(
+                image,
+                arch,
+                os_name,
+                latest_digest,
+                force_refresh=force_registry_refresh,
+            )
             if remote_label:
                 latest_label = remote_label
             if remote_digest and current_repo_digest(details, image):
@@ -196,7 +214,31 @@ class UpdateEngine:
             state = self._active_updates.get(service_id)
             return dict(state) if state else None
 
-    def cached_latest_image_info(self, image: str, arch: str = "amd64", os_name: str = "linux", known_local_digest: str | None = None) -> tuple[str | None, str | None]:
+    def cached_latest_image_info(
+        self,
+        image: str,
+        arch: str = "amd64",
+        os_name: str = "linux",
+        known_local_digest: str | None = None,
+        force_refresh: bool = False,
+    ) -> tuple[str | None, str | None]:
+        with self._registry_cache_lock:
+            return self._cached_latest_image_info(
+                image,
+                arch,
+                os_name,
+                known_local_digest,
+                force_refresh,
+            )
+
+    def _cached_latest_image_info(
+        self,
+        image: str,
+        arch: str = "amd64",
+        os_name: str = "linux",
+        known_local_digest: str | None = None,
+        force_refresh: bool = False,
+    ) -> tuple[str | None, str | None]:
         settings = effective_settings(self.store.get_settings())
         cache = load_json(self.registry_cache_file, {})
         key = f"{image}|{os_name}|{arch}"
@@ -211,8 +253,10 @@ class UpdateEngine:
         cache_is_fresh = bool(refreshed_at and int(time.time()) - refreshed_at < cache_ttl_seconds)
         cache_matches_local = bool(known_local_digest and cached_digest == known_local_digest)
         cache_mismatches_local = bool(known_local_digest and cached_digest and cached_digest != known_local_digest)
-        if isinstance(cached, dict) and cache_is_fresh and not cache_mismatches_local:
+        if isinstance(cached, dict) and cache_is_fresh and not cache_mismatches_local and not force_refresh:
             return cached.get("label"), cached.get("digest")
+        if force_refresh:
+            self.audit("registry_cache_force_refresh", image=image, arch=arch, os=os_name)
         if cache_mismatches_local:
             self.audit("registry_cache_stale", image=image, arch=arch, os=os_name, cached_digest=cached_digest, local_digest=known_local_digest)
         label, digest = latest_registry_version(image, self.audit, arch, os_name)
