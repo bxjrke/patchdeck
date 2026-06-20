@@ -8,7 +8,14 @@ from patchdeck.docker_import import icon_slug_for_service, preferred_icon_slug
 from patchdeck.main import app
 from patchdeck.models import ServiceConfig, ServiceStatus, Settings
 from patchdeck.store import JsonStore
-from patchdeck.update_engine import UpdateEngine, effective_settings, format_release_notes_url, mqtt_cleanup_messages, mqtt_enabled
+from patchdeck.update_engine import (
+    UpdateEngine,
+    effective_settings,
+    format_release_notes_url,
+    mqtt_cleanup_messages,
+    mqtt_enabled,
+    mqtt_publish_discovery,
+)
 
 
 client = TestClient(app)
@@ -57,10 +64,10 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.3.1" in settings_response.text
-    assert '/static/favicon.png?v0.3.1-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.3.1-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.3.1-logo4' in index_response.text
+    assert "Patchdeck 0.3.2" in settings_response.text
+    assert '/static/favicon.png?v0.3.2-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.3.2-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.3.2-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -209,7 +216,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.3.1-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.3.2-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -537,6 +544,65 @@ def test_mqtt_cleanup_messages_clear_home_assistant_discovery() -> None:
     assert ("patchdeck/homeassistant/state", b"", True) in messages
     assert ("patchdeck/homeassistant/json", b"", True) in messages
     assert ("patchdeck/homeassistant/latest_version", b"", True) in messages
+
+
+def test_mqtt_discovery_uses_json_state_and_keeps_plain_state_compatible(monkeypatch) -> None:
+    settings = Settings(mqtt_enabled=True, mqtt_host="mosquitto")
+    status = ServiceStatus(
+        service_id="homeassistant",
+        id="homeassistant",
+        name="Home Assistant",
+        current_version="2026.6.1",
+        latest_version="2026.6.2",
+        update_available=True,
+    )
+    published = []
+
+    def fake_publish_batch(settings, messages, audit) -> bool:
+        published.extend(messages)
+        return True
+
+    monkeypatch.setattr(update_engine, "mqtt_publish_batch", fake_publish_batch)
+
+    mqtt_publish_discovery(settings, [status], lambda *args, **kwargs: None, in_progress=True, update_percentage=42)
+
+    discovery = next(
+        json.loads(payload)
+        for topic, payload, retain in published
+        if topic == "homeassistant/update/patchdeck_homeassistant/config"
+    )
+    assert discovery["state_topic"] == "patchdeck/homeassistant/json"
+    assert discovery["latest_version_topic"] == "patchdeck/homeassistant/latest_version"
+    assert ("patchdeck/homeassistant/state", "2026.6.1", True) in published
+
+    json_payload = next(
+        json.loads(payload)
+        for topic, payload, retain in published
+        if topic == "patchdeck/homeassistant/json"
+    )
+    assert json_payload["installed_version"] == "2026.6.1"
+    assert json_payload["latest_version"] == "2026.6.2"
+    assert json_payload["in_progress"] is True
+    assert json_payload["update_percentage"] == 42
+
+
+def test_update_lifecycle_publishes_mqtt_progress(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    service = ServiceConfig(id="homeassistant", name="Home Assistant", update_enabled=True)
+    engine = UpdateEngine(test_store)
+    published = []
+
+    monkeypatch.setattr(engine, "publish_service_state", lambda service, **state: published.append((service.id, state)))
+    monkeypatch.setattr(engine, "run_update", lambda service: (0, "updated"))
+
+    ok, message = engine.perform_update(service, "mqtt")
+
+    assert ok is True
+    assert message == "Update completed."
+    assert published == [
+        ("homeassistant", {"in_progress": True, "update_percentage": 0}),
+        ("homeassistant", {"in_progress": False}),
+    ]
 
 
 def test_disabling_mqtt_clears_retained_entities(tmp_path, monkeypatch) -> None:

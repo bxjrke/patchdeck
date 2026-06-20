@@ -685,7 +685,7 @@ def mqtt_publish_discovery(
             "name": "Container Update",
             "unique_id": f"patchdeck_{sid}",
             "object_id": f"patchdeck_{sid}",
-            "state_topic": f"{base_topic}/state",
+            "state_topic": f"{base_topic}/json",
             "latest_version_topic": f"{base_topic}/latest_version",
             "command_topic": f"{base_topic}/command",
             "payload_install": "install",

@@ -52,6 +52,10 @@ patchdeck/<service-id>/json
 patchdeck/<service-id>/command
 ```
 
+Home Assistant consumes the JSON topic as the entity `state_topic`, including
+`in_progress` and `update_percentage`. Patchdeck continues to publish the
+plain-string `/state` topic for compatibility with existing external consumers.
+
 The discovery prefix and base topic can be changed in the settings UI. When MQTT is switched from active to inactive, Patchdeck clears retained discovery and state topics for the configured services so stale Home Assistant entities are removed instead of lingering as retained MQTT data.
 
 ## Release Notes
@@ -111,4 +115,3 @@ Patchdeck should use SemVer once releases begin:
 - Patch releases: bug fixes only.
 - Minor releases: backwards-compatible features.
 - Major releases: breaking configuration or API changes.
-

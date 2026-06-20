@@ -1,6 +1,6 @@
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.3.1
+    image: ghcr.io/bxjrke/patchdeck:0.3.2
     container_name: patchdeck
     restart: unless-stopped
     ports:

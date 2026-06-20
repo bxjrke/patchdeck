@@ -6,8 +6,8 @@ LABEL org.opencontainers.image.title="Patchdeck" \
       org.opencontainers.image.description="A small web UI for explicitly updating selected Docker Compose services." \
       org.opencontainers.image.source="https://github.com/bxjrke/patchdeck" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="0.3.1" \
-      io.patchdeck.version="0.3.1"
+      org.opencontainers.image.version="0.3.2" \
+      io.patchdeck.version="0.3.2"
 
 WORKDIR /app
 
