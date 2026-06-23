@@ -1,6 +1,6 @@
 # Publication Review
 
-Patchdeck is directionally publishable as a `0.x` homelab tool. It is not a public `1.0` yet, but the core Docker image and release path are now in place.
+Patchdeck is publicly available as a `0.x` homelab tool. The core image, release path, Docker deployment documentation, and manual update flow are in place. It is not a stable `1.0` yet.
 
 ## Product Scope
 
@@ -10,6 +10,7 @@ Patchdeck should remain narrow:
 - No automatic updates.
 - No built-in authorization.
 - One selected service update per user action.
+- No additional permanent service for Patchdeck self-updates.
 
 ## Image Readiness
 
@@ -19,11 +20,7 @@ Ready:
 - The image exposes `/healthz` and persists state in `/data`.
 - GitHub Actions builds `linux/amd64` and `linux/arm64` images.
 - Versioned tags are published from SemVer Git tags.
-
-Still required outside the repository:
-
-- Make the GHCR package public.
-- Verify anonymous pulls from a clean machine.
+- The GHCR package is public and anonymous manifest access has been verified.
 
 ## Repository Readiness
 
@@ -32,13 +29,14 @@ Ready or mostly ready:
 - Core FastAPI app exists.
 - Docker scan/import exists.
 - Manual per-service update flow exists.
+- Patchdeck self-updates use an ephemeral helper container that survives the app-container recreate and removes itself afterward.
 - MQTT disabled state no longer becomes enabled just because an MQTT host is configured.
 - Local icon cache exists.
 - Basic tests exist.
 - MIT license exists.
 - Public Docker deployment docs exist.
 
-Still worth doing after the first public image:
+Still worth doing before `1.0`:
 
 - Move UI translations out of inline JavaScript into standalone files.
 - Add documented language contribution flow.

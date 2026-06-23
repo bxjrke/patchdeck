@@ -1,46 +1,97 @@
 # Patchdeck
 
-Patchdeck is a small web UI for explicitly updating selected Docker Compose services on a Linux server and exposing those updates as Home Assistant MQTT update entities.
+Patchdeck is a focused web UI for manually updating selected Docker Compose services on a Linux server. It discovers Compose metadata from Docker, shows available image updates, runs controlled service updates, and can expose the same actions as Home Assistant MQTT update entities.
 
-Its key feature is MQTT publishing for Home Assistant: Patchdeck can create one `update` entity per configured service, report installed/latest versions, and let Home Assistant trigger the same manual update action.
-
-It is intentionally narrow in scope:
+Patchdeck is designed for private homelabs:
 
 - Docker and Docker Compose only.
-- No automatic updates.
-- No authorization layer in Patchdeck itself.
-- Updates are triggered one service at a time by a user who already controls the server.
+- Updates run only when explicitly requested.
+- One selected service is updated at a time.
+- No built-in authentication or authorization layer.
+- No additional host service is required for Patchdeck self-updates.
 
-Patchdeck is meant for private homelabs where the operator wants a comfortable web surface for selected container updates without running a broad auto-updater.
+> [!WARNING]
+> Mounting the Docker socket gives Patchdeck effective administrative control over the host. Keep it on a trusted network or behind authenticated access; do not expose it directly to the public internet.
 
-## Installation
+## Quick Start
 
-The recommended installation path is Docker Compose with the published container image. See the [Docker deployment guide](docs/DOCKER.md) for the full setup, required volume mounts, and security notes.
+Create a Compose file:
 
-## Current Features
+```yaml
+services:
+  patchdeck:
+    image: ghcr.io/bxjrke/patchdeck:0.3.4
+    container_name: patchdeck
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /your/own/path/patchdeck:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /your/compose/files:/your/compose/files
+```
 
-- Service overview with current/latest version information where it can be detected.
-- Home Assistant MQTT discovery for per-service `update` entities.
-- MQTT state publishing for installed version, latest version, update progress, and release-note URLs.
-- Optional Home Assistant-triggered install commands for services that allow updates.
-- Docker scan/import via the local Docker socket.
-- Docker/Compose metadata detection for container name, image, compose file, project directory, and compose service.
-- Per-service update trigger using `docker compose pull` and `docker compose up -d --no-deps`.
-- Self-update support for Patchdeck itself when it runs from Docker Compose, using a short-lived helper container launched over the Docker socket.
-- Global update lock and last-run/audit state.
-- Local registry cache for latest-image checks.
-- Local icon cache for detected service icons.
-- Optional icon path override per service.
-- Optional release-notes link per service.
-- Autosaving settings UI.
-- Version display in the UI footer.
+Replace the two example host paths, then start Patchdeck:
+
+```bash
+docker compose up -d
+```
+
+Open `http://SERVER:8000`, scan Docker, import the services you want to manage, and enable updates only for the selected services.
+
+The Compose-files mount is optional for discovery and update-status checks, but required before Patchdeck can run Compose updates. Keep host and container paths identical where possible because Docker Compose labels normally contain absolute host paths.
+
+See the [Docker deployment guide](docs/DOCKER.md) for volume details, MQTT setup, image tags, architectures, and deployment guidance.
+
+## Features
+
+- Service overview with installed and latest image versions where they can be detected.
+- Manual updates through `docker compose pull` and `docker compose up -d --no-deps`.
+- Docker scan/import with automatic Compose project, file, service, image, and container detection.
+- Safe Patchdeck self-updates through an ephemeral helper container.
+- Persistent update progress, last-run results, audit log, and global update lock.
+- Registry-result caching and manual forced refresh.
+- Home Assistant MQTT discovery with one `update` entity per configured service.
+- MQTT install commands, installed/latest versions, release-note links, and update progress.
+- Local icon cache with optional per-service icon overrides.
+- Optional release-note URLs and version-based URL templates.
 - English UI with German translation.
+- Multi-architecture images for `linux/amd64` and `linux/arm64`.
+
+## Self-Updates
+
+Patchdeck updates itself without a second permanent service or a separate host installation.
+
+When a self-update is requested, Patchdeck starts a temporary container named:
+
+```text
+patchdeck-self-update-helper-<job-id>
+```
+
+The helper inherits Patchdeck's existing mounts, validates the running Patchdeck container and its Compose labels, pulls the image, recreates only the Patchdeck Compose service, waits for the replacement container to become healthy, and writes the result to `/data`. It then removes itself automatically.
+
+The helper runs independently from the Patchdeck app container, so stopping the old app container does not interrupt the Compose recreate operation.
+
+Self-updates require:
+
+- the Docker socket mounted read-write;
+- Patchdeck itself running as a Docker Compose service;
+- absolute Compose file and project paths in Docker's Compose labels;
+- Patchdeck's Compose files available inside the container at those same paths;
+- persistent `/data` storage.
 
 ## MQTT and Home Assistant
 
-MQTT is disabled by default. Enable it in the settings UI or set both `PATCHDECK_MQTT_ENABLED=true` and `PATCHDECK_MQTT_HOST`. A configured host alone does not enable publishing.
+MQTT is optional and disabled by default. Enable it in the settings UI or set:
 
-When MQTT is active, Patchdeck publishes one Home Assistant `update` entity per configured service through MQTT discovery. Each entity reports the installed version, latest version, update availability, update progress, and an optional release-notes URL. If the service allows manual updates in Patchdeck, Home Assistant can trigger the same update action by sending the entity install command.
+```text
+PATCHDECK_MQTT_ENABLED=true
+PATCHDECK_MQTT_HOST=your-mqtt-broker
+```
+
+A configured MQTT host alone does not enable publishing.
+
+When active, Patchdeck publishes one Home Assistant `update` entity per configured service. Entities can report the installed version, latest version, update availability, release-note URL, and update progress. If updates are enabled for the service, Home Assistant can trigger the same manual update action.
 
 Default topics:
 
@@ -52,28 +103,18 @@ patchdeck/<service-id>/json
 patchdeck/<service-id>/command
 ```
 
-Home Assistant consumes the JSON topic as the entity `state_topic`, including
-`in_progress` and `update_percentage`. Patchdeck continues to publish the
-plain-string `/state` topic for compatibility with existing external consumers.
+The JSON topic is the Home Assistant entity state topic and includes `in_progress` and `update_percentage`. The plain-string `/state` topic remains available for compatibility with other consumers.
 
-The discovery prefix and base topic can be changed in the settings UI. When MQTT is switched from active to inactive, Patchdeck clears retained discovery and state topics for the configured services so stale Home Assistant entities are removed instead of lingering as retained MQTT data.
+When MQTT is disabled after being active, Patchdeck clears its retained discovery and state messages so stale Home Assistant entities do not linger.
 
 ## Release Notes
 
-Each service has an optional release-notes source.
+Each service can optionally provide a release-notes source:
 
-Supported values:
-
-- Empty: no release-notes link is shown.
-- `homeassistant`: uses Patchdeck built-in Home Assistant release-notes lookup. This is currently the only service-specific helper shipped by Patchdeck.
-- A full `https://` or `http://` URL: shown as the release-notes link.
-- A URL template with placeholders: Patchdeck replaces placeholders from the detected latest version.
-
-Supported placeholders:
-
-- `{version}`: raw detected version, for example `1.2.3`.
-- `{version_url}`: URL-encoded version.
-- `{major}`, `{minor}`, `{patch}`: dot-separated version parts when present.
+- Empty: no release-notes link.
+- `homeassistant`: Patchdeck's built-in Home Assistant release-notes lookup.
+- A fixed `https://` or `http://` URL.
+- A URL template containing `{version}`, `{version_url}`, `{major}`, `{minor}`, or `{patch}`.
 
 Examples:
 
@@ -81,37 +122,38 @@ Examples:
 homeassistant
 https://github.com/example/app/releases/tag/{version}
 https://example.test/changelog/{major}/{minor}
-https://example.test/releases
 ```
 
-## Docker Image
+## Security
 
-Patchdeck is designed to run as a container that controls the host Docker daemon through the Docker socket. The published image includes Patchdeck, Docker CLI, and Docker Compose v2. Images are published to GitHub Container Registry as `ghcr.io/bxjrke/patchdeck`.
+Mounting `/var/run/docker.sock` gives Patchdeck effective control over the host Docker daemon. Treat access to Patchdeck like administrative access to the server.
 
-See the [Docker deployment guide](docs/DOCKER.md) for the Compose example, volume explanation, MQTT configuration, image tags, and security notes.
+Recommended deployment:
+
+- Keep Patchdeck on a private LAN or VPN.
+- Use a reverse proxy with authentication if more than trusted operators can reach it.
+- Do not expose Patchdeck directly to the public internet.
+- Enable update actions only for services you intend Patchdeck to manage.
+- Back up `/data` before major upgrades.
+
+Patchdeck intentionally does not implement its own user or permission system.
+
+## Container Images
+
+Images are published at:
+
+```text
+ghcr.io/bxjrke/patchdeck
+```
+
+Use a versioned tag for normal installations. The `main` tag tracks unreleased development and is intended for testing.
+
+Release and deployment details:
+
+- [Docker deployment guide](docs/DOCKER.md)
+- [Release history](https://github.com/bxjrke/patchdeck/releases)
+- [Roadmap](ROADMAP.md)
 
 ## License
 
 Patchdeck is released under the [MIT License](LICENSE).
-
-## Development
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e .[dev]
-pytest
-uvicorn patchdeck.main:app --reload
-```
-
-Open: http://127.0.0.1:8000
-
-## Versioning
-
-Patchdeck should use SemVer once releases begin:
-
-- `0.x`: pre-release iteration, breaking changes allowed.
-- `1.0.0`: first stable public image and documented install path.
-- Patch releases: bug fixes only.
-- Minor releases: backwards-compatible features.
-- Major releases: breaking configuration or API changes.

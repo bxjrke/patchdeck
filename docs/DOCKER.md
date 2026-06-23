@@ -53,6 +53,8 @@ If you only want Patchdeck to discover containers and show update status at firs
 
 Patchdeck self-updates do not require a second long-running service. When you trigger a Patchdeck update from the UI, Patchdeck starts a temporary helper container through the mounted Docker socket. That helper inherits Patchdeck's mounts with `--volumes-from`, updates only the detected Patchdeck Compose service, waits for the replacement container to become healthy, writes the result to `/data`, and removes itself automatically.
 
+Self-update requires Patchdeck itself to run as a Docker Compose service. Docker's Compose labels must contain absolute Compose file and project paths, and those paths must exist inside the Patchdeck container. Mount the directory containing Patchdeck's own Compose file at the same absolute path on the host and in the container.
+
 ## MQTT
 
 MQTT stays disabled unless it is enabled in the settings UI or with `PATCHDECK_MQTT_ENABLED=true`. Setting `PATCHDECK_MQTT_HOST` alone configures the host but does not enable MQTT publishing.
