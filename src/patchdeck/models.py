@@ -87,6 +87,7 @@ class ServiceStatus(BaseModel):
     update_available: bool = False
     update_enabled: bool = False
     update_in_progress: bool = False
+    update_percentage: int | None = Field(default=None, ge=0, le=100)
     update_started_at: int | None = None
     update_source: str | None = None
     last_run: dict[str, Any] | None = None

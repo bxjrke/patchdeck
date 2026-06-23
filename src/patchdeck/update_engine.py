@@ -77,6 +77,7 @@ class UpdateEngine:
                 update_available=bool(mock.get("update_available", current != latest)),
                 update_enabled=False,
                 update_in_progress=running,
+                update_percentage=mock.get("update_percentage"),
                 update_started_at=mock.get("update_started_at"),
                 update_source=mock.get("update_source", "demo") if running else None,
                 last_run=mock.get("last_run"),
@@ -131,6 +132,7 @@ class UpdateEngine:
             update_available=update_available,
             update_enabled=service_update_enabled(service),
             update_in_progress=bool(running),
+            update_percentage=(running or {}).get("update_percentage"),
             update_started_at=(running or {}).get("started_at"),
             update_source=(running or {}).get("source"),
             last_run=self.load_last_runs().get(service_id),
@@ -147,7 +149,7 @@ class UpdateEngine:
                 self.audit("update_busy", service=service_id, source=source)
                 self.publish_service_state(service, in_progress=True)
                 return False, "An update is already running. Please wait."
-            self.mark_update_active(service_id, True, source)
+            self.mark_update_active(service_id, True, source, phase="Preparing update", update_percentage=0)
             self.audit("update_start", service=service_id, source=source)
             self.publish_service_state(service, in_progress=True, update_percentage=0)
             code, output = self.run_update(service)
@@ -175,11 +177,13 @@ class UpdateEngine:
             return 1, "Service is not fully configured."
         pull = [DOCKER_BIN, "compose", "-f", compose_file, "pull", compose_service]
         up = [DOCKER_BIN, "compose", "-f", compose_file, "up", "-d", "--no-deps", compose_service]
-        self.mark_update_active(service_id, True, phase="Pulling Image")
+        self.mark_update_active(service_id, True, phase="Pulling image", update_percentage=50)
+        self.publish_service_state(service, in_progress=True, update_percentage=50)
         code1, out1 = run_cmd(pull, cwd=project_dir, timeout=300)
         if code1 != 0:
             return code1, "$ " + " ".join(pull) + "\n" + out1
-        self.mark_update_active(service_id, True, phase="Recreating")
+        self.mark_update_active(service_id, True, phase="Recreating", update_percentage=90)
+        self.publish_service_state(service, in_progress=True, update_percentage=90)
         if service_id == "patchdeck":
             try:
                 subprocess.Popen(up, cwd=project_dir or None, env=docker_command_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -197,7 +201,14 @@ class UpdateEngine:
         data[service_id] = payload
         atomic_json(self.last_run_file, data)
 
-    def mark_update_active(self, service_id: str, active: bool, source: str = "unknown", phase: str = "Starting update") -> None:
+    def mark_update_active(
+        self,
+        service_id: str,
+        active: bool,
+        source: str = "unknown",
+        phase: str = "Starting update",
+        update_percentage: int | None = None,
+    ) -> None:
         with self._active_lock:
             if active:
                 existing = self._active_updates.get(service_id) or {}
@@ -205,6 +216,7 @@ class UpdateEngine:
                     "source": existing.get("source", source) if source == "unknown" else source,
                     "started_at": existing.get("started_at", int(time.time())),
                     "phase": phase,
+                    "update_percentage": existing.get("update_percentage") if update_percentage is None else update_percentage,
                 }
             else:
                 self._active_updates.pop(service_id, None)
@@ -713,7 +725,9 @@ def mqtt_update_state_payload(
     if in_progress is None:
         in_progress = bool(s.update_in_progress)
     payload["in_progress"] = bool(in_progress)
-    if update_percentage is not _MQTT_UNSET:
+    if update_percentage is _MQTT_UNSET and s.update_percentage is not None:
+        payload["update_percentage"] = s.update_percentage
+    elif update_percentage is not _MQTT_UNSET:
         payload["update_percentage"] = update_percentage
     return json.dumps(payload, separators=(",", ":"))
 

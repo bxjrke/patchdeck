@@ -64,10 +64,10 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.3.2" in settings_response.text
-    assert '/static/favicon.png?v0.3.2-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.3.2-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.3.2-logo4' in index_response.text
+    assert "Patchdeck 0.3.3" in settings_response.text
+    assert '/static/favicon.png?v0.3.3-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.3.3-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.3.3-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -217,7 +217,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.3.2-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.3.3-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -567,6 +567,7 @@ def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch
 def test_patchdeck_self_update_recreate_runs_detached(tmp_path, monkeypatch) -> None:
     engine = UpdateEngine(JsonStore(tmp_path))
     popen_calls = []
+    published = []
 
     def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
         assert args == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "pull", "patchdeck"]
@@ -579,6 +580,7 @@ def test_patchdeck_self_update_recreate_runs_detached(tmp_path, monkeypatch) -> 
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
     monkeypatch.setattr(update_engine.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(engine, "publish_service_state", lambda service, **state: published.append((service.id, state)))
 
     code, output = engine.run_update(
         ServiceConfig(
@@ -595,6 +597,44 @@ def test_patchdeck_self_update_recreate_runs_detached(tmp_path, monkeypatch) -> 
     assert popen_calls[0][0] == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "up", "-d", "--no-deps", "patchdeck"]
     assert popen_calls[0][1]["cwd"] == "/srv/patchdeck"
     assert popen_calls[0][1]["start_new_session"] is True
+    assert published == [
+        ("patchdeck", {"in_progress": True, "update_percentage": 50}),
+        ("patchdeck", {"in_progress": True, "update_percentage": 90}),
+    ]
+
+
+def test_compose_update_publishes_phase_progress(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    published = []
+    commands = []
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        commands.append(args)
+        return 0, "ok"
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(engine, "publish_service_state", lambda service, **state: published.append((service.id, state)))
+
+    code, output = engine.run_update(
+        ServiceConfig(
+            id="homeassistant",
+            name="Home Assistant",
+            compose_file="/srv/homeassistant/compose.yaml",
+            compose_project_dir="/srv/homeassistant",
+            compose_service="homeassistant",
+        )
+    )
+
+    assert code == 0
+    assert "$ " + " ".join(commands[0]) in output
+    assert commands == [
+        [update_engine.DOCKER_BIN, "compose", "-f", "/srv/homeassistant/compose.yaml", "pull", "homeassistant"],
+        [update_engine.DOCKER_BIN, "compose", "-f", "/srv/homeassistant/compose.yaml", "up", "-d", "--no-deps", "homeassistant"],
+    ]
+    assert published == [
+        ("homeassistant", {"in_progress": True, "update_percentage": 50}),
+        ("homeassistant", {"in_progress": True, "update_percentage": 90}),
+    ]
 
 
 def test_mqtt_host_env_does_not_enable_mqtt_when_disabled(monkeypatch) -> None:
