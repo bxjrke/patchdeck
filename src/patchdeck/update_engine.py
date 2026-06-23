@@ -3,15 +3,18 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+from dataclasses import dataclass
+from pathlib import Path
 import re
+import secrets
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
 from urllib.parse import quote
-from pathlib import Path
 from typing import Any
 
 from .models import ServiceConfig, ServiceStatus, Settings, UpdatePolicy
@@ -20,6 +23,18 @@ from .store import JsonStore
 DOCKER_BIN = os.environ.get("PATCHDECK_DOCKER_BIN", "/usr/bin/docker")
 COMPOSE_BIN = os.environ.get("PATCHDECK_COMPOSE_BIN", "/usr/libexec/docker/cli-plugins/docker-compose")
 _MQTT_UNSET = object()
+SELF_UPDATE_HELPER_PREFIX = "patchdeck-self-update-helper-"
+SAFE_DOCKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+SELF_UPDATE_JOB_ID_RE = re.compile(r"^[0-9]{10}-[a-f0-9]{8}$")
+SELF_UPDATE_START_GRACE_SECONDS = 30
+
+
+@dataclass
+class UpdateRunResult:
+    exit_code: int
+    output: str
+    deferred: bool = False
+    message: str | None = None
 
 
 class UpdateEngine:
@@ -29,6 +44,7 @@ class UpdateEngine:
         self.audit_log = self.state_dir / "audit.log"
         self.lock_file = self.state_dir / "update.lock"
         self.last_run_file = self.state_dir / "last-runs.json"
+        self.self_update_state_file = self.state_dir / "self-update-state.json"
         self.release_cache_file = self.state_dir / "release-notes-cache.json"
         self.registry_cache_file = self.state_dir / "registry-cache.json"
         self._active_updates: dict[str, dict[str, Any]] = {}
@@ -141,6 +157,9 @@ class UpdateEngine:
 
     def perform_update(self, service: ServiceConfig, source: str) -> tuple[bool, str]:
         service_id = service.id
+        if self.self_update_in_progress():
+            self.audit("update_busy", service=service_id, source=source, reason="self_update_in_progress")
+            return False, "A Patchdeck self-update is already running. Please wait."
         self.state_dir.mkdir(parents=True, exist_ok=True)
         with self.lock_file.open("a+") as lock_handle:
             try:
@@ -152,15 +171,18 @@ class UpdateEngine:
             self.mark_update_active(service_id, True, source, phase="Preparing update", update_percentage=0)
             self.audit("update_start", service=service_id, source=source)
             self.publish_service_state(service, in_progress=True, update_percentage=0)
-            code, output = self.run_update(service)
-            ok = code == 0
-            self.save_last_run(service_id, {"ts": int(time.time()), "ok": ok, "exit_code": code, "source": source, "output": output[-2000:]})
-            self.audit("update_done", service=service_id, source=source, ok=ok, exit_code=code, output=output[-1200:])
+            result = self.run_update(service, source)
+            if result.deferred:
+                self.audit("update_detached", service=service_id, source=source, output=result.output[-1200:])
+                return True, result.message or "Self-update started."
+            ok = result.exit_code == 0
+            self.save_last_run(service_id, {"ts": int(time.time()), "ok": ok, "exit_code": result.exit_code, "source": source, "output": result.output[-2000:]})
+            self.audit("update_done", service=service_id, source=source, ok=ok, exit_code=result.exit_code, output=result.output[-1200:])
             self.mark_update_active(service_id, False)
             self.publish_service_state(service, in_progress=False, update_percentage=None)
             return ok, "Update completed." if ok else "Update failed. Details are available in the audit log."
 
-    def run_update(self, service: ServiceConfig) -> tuple[int, str]:
+    def run_update(self, service: ServiceConfig, source: str = "unknown") -> UpdateRunResult:
         service_id = service.id
         compose_file = service.compose_file or service.metadata.get("compose_file") or ""
         project_dir = service.compose_project_dir or service.metadata.get("compose_project_dir") or service.metadata.get("compose_project") or ""
@@ -172,26 +194,29 @@ class UpdateEngine:
                     compose_file = str(candidate)
                     break
         if not project_dir and compose_file:
-            project_dir = str(Path(compose_file).parent)
+            try:
+                project_dir = str(Path(split_compose_files(compose_file)[0]).parent)
+            except ValueError:
+                project_dir = ""
         if not compose_file or not compose_service:
-            return 1, "Service is not fully configured."
-        pull = [DOCKER_BIN, "compose", "-f", compose_file, "pull", compose_service]
-        up = [DOCKER_BIN, "compose", "-f", compose_file, "up", "-d", "--no-deps", compose_service]
+            return UpdateRunResult(1, "Service is not fully configured.")
+        if service_id == "patchdeck":
+            return self.start_self_update_helper(service, source, compose_file, project_dir, compose_service)
+        try:
+            compose_files = split_compose_files(compose_file)
+        except ValueError as exc:
+            return UpdateRunResult(1, str(exc))
+        pull = compose_command(compose_files, "pull", compose_service)
+        up = compose_command(compose_files, "up", "-d", "--no-deps", compose_service)
         self.mark_update_active(service_id, True, phase="Pulling image", update_percentage=50)
         self.publish_service_state(service, in_progress=True, update_percentage=50)
         code1, out1 = run_cmd(pull, cwd=project_dir, timeout=300)
         if code1 != 0:
-            return code1, "$ " + " ".join(pull) + "\n" + out1
+            return UpdateRunResult(code1, "$ " + " ".join(pull) + "\n" + out1)
         self.mark_update_active(service_id, True, phase="Recreating", update_percentage=90)
         self.publish_service_state(service, in_progress=True, update_percentage=90)
-        if service_id == "patchdeck":
-            try:
-                subprocess.Popen(up, cwd=project_dir or None, env=docker_command_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            except Exception as exc:
-                return 1, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + str(exc)
-            return 0, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\nSelf-update recreate started in the background."
         code2, out2 = run_cmd(up, cwd=project_dir, timeout=300)
-        return code2, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2
+        return UpdateRunResult(code2, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2)
 
     def load_last_runs(self) -> dict[str, Any]:
         return load_json(self.last_run_file, {})
@@ -200,6 +225,165 @@ class UpdateEngine:
         data = self.load_last_runs()
         data[service_id] = payload
         atomic_json(self.last_run_file, data)
+
+    def load_self_update_state(self) -> dict[str, Any] | None:
+        state = load_json(self.self_update_state_file, None)
+        return state if isinstance(state, dict) else None
+
+    def save_self_update_state(self, payload: dict[str, Any]) -> None:
+        atomic_json(self.self_update_state_file, payload)
+
+    def self_update_in_progress(self) -> bool:
+        state = self.load_self_update_state()
+        if not (state and state.get("service_id") == "patchdeck" and state.get("in_progress")):
+            return False
+        helper_name = state.get("helper_container")
+        started_at = state.get("started_at")
+        if not isinstance(helper_name, str) or not SAFE_DOCKER_NAME_RE.fullmatch(helper_name):
+            return False
+        code, _ = run_cmd([DOCKER_BIN, "inspect", helper_name, "--format", "{{.State.Status}}"], timeout=15)
+        if code == 0:
+            return True
+        if isinstance(started_at, int) and time.time() - started_at <= SELF_UPDATE_START_GRACE_SECONDS:
+            return True
+        failed = {
+            **state,
+            "in_progress": False,
+            "phase": "Helper container stopped unexpectedly",
+            "ok": False,
+            "exit_code": 1,
+            "finished_at": int(time.time()),
+        }
+        self.save_self_update_state(failed)
+        self.save_last_run("patchdeck", {
+            "ts": failed["finished_at"],
+            "ok": False,
+            "exit_code": 1,
+            "source": state.get("source", "unknown"),
+            "output": "Self-update helper container disappeared before writing a result.",
+            "job_id": state.get("job_id"),
+        })
+        self.audit(
+            "self_update_helper_disappeared",
+            service="patchdeck",
+            source=state.get("source", "unknown"),
+            job_id=state.get("job_id"),
+            helper_container=helper_name,
+        )
+        job_id = state.get("job_id")
+        if isinstance(job_id, str) and SELF_UPDATE_JOB_ID_RE.fullmatch(job_id):
+            try:
+                (self.state_dir / f"self-update-job-{job_id}.json").unlink()
+            except FileNotFoundError:
+                pass
+        return False
+
+    def start_self_update_helper(
+        self,
+        service: ServiceConfig,
+        source: str,
+        compose_file: str,
+        project_dir: str,
+        compose_service: str,
+    ) -> UpdateRunResult:
+        helper_target = os.environ.get("PATCHDECK_CONTAINER") or os.environ.get("HOSTNAME") or ""
+        if not helper_target or not SAFE_DOCKER_NAME_RE.fullmatch(helper_target):
+            return UpdateRunResult(1, "Patchdeck self-update could not determine its runtime container identity.")
+        details, error = docker_container_details(helper_target)
+        if details is None:
+            return UpdateRunResult(1, f"Patchdeck self-update could not inspect its current container: {error}")
+        config = details.get("Config") or {}
+        labels = config.get("Labels") or {}
+        helper_image = str(config.get("Image") or "")
+        detected_container = str(details.get("Name") or helper_target).lstrip("/")
+        detected_compose_file = str(labels.get("com.docker.compose.project.config_files") or "")
+        detected_project_dir = str(labels.get("com.docker.compose.project.working_dir") or "")
+        detected_compose_service = str(labels.get("com.docker.compose.service") or "")
+        if not helper_image:
+            return UpdateRunResult(1, "Patchdeck self-update requires the current image reference.")
+        if not SAFE_DOCKER_NAME_RE.fullmatch(detected_compose_service):
+            return UpdateRunResult(1, "Patchdeck self-update requires a Docker Compose-managed container.")
+        try:
+            configured_files = split_compose_files(compose_file)
+            detected_files = split_compose_files(detected_compose_file)
+        except ValueError as exc:
+            return UpdateRunResult(1, str(exc))
+        if configured_files != detected_files or project_dir != detected_project_dir or compose_service != detected_compose_service:
+            self.audit(
+                "self_update_config_refreshed_from_runtime",
+                service="patchdeck",
+                configured_container=service.container,
+                runtime_container=detected_container,
+            )
+        if not Path(project_dir).is_absolute() or any(not Path(item).is_absolute() for item in configured_files):
+            return UpdateRunResult(1, "Patchdeck self-update requires absolute Compose paths.")
+
+        job_id = f"{int(time.time())}-{secrets.token_hex(4)}"
+        helper_name = f"{SELF_UPDATE_HELPER_PREFIX}{job_id}"
+        started_at = int(time.time())
+        job_file = self.state_dir / f"self-update-job-{job_id}.json"
+        job = {
+            "job_id": job_id,
+            "helper_container": helper_name,
+            "service_id": "patchdeck",
+            "source": source,
+            "started_at": started_at,
+            "data_dir": str(self.state_dir),
+            "container": detected_container,
+            "compose_file": detected_compose_file,
+            "compose_project_dir": detected_project_dir,
+            "compose_service": detected_compose_service,
+        }
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        atomic_json(job_file, job)
+        self.mark_update_active(service.id, True, source=source, phase="Starting helper container", update_percentage=5)
+        self.save_self_update_state({
+            **job,
+            "in_progress": True,
+            "phase": "Starting helper container",
+            "update_percentage": 5,
+        })
+        self.publish_service_state(service, in_progress=True, update_percentage=5)
+        self.audit("self_update_helper_scheduled", service=service.id, source=source, job_id=job_id, helper_container=helper_name)
+        cmd = [
+            DOCKER_BIN,
+            "run",
+            "--rm",
+            "--detach",
+            "--name",
+            helper_name,
+            "--volumes-from",
+            helper_target,
+            "--entrypoint",
+            "python",
+            helper_image,
+            "-m",
+            "patchdeck.update_engine",
+            "self-update-helper",
+            str(job_file),
+        ]
+        code, out = run_cmd(cmd, timeout=90)
+        if code != 0:
+            try:
+                job_file.unlink()
+            except FileNotFoundError:
+                pass
+            self.save_self_update_state({
+                **job,
+                "in_progress": False,
+                "phase": "Helper start failed",
+                "update_percentage": 5,
+                "ok": False,
+                "exit_code": code,
+                "finished_at": int(time.time()),
+            })
+            return UpdateRunResult(code, "$ " + " ".join(cmd) + "\n" + out)
+        return UpdateRunResult(
+            0,
+            "$ " + " ".join(cmd) + "\n" + out,
+            deferred=True,
+            message="Self-update started. Patchdeck will restart and report the result after the health check.",
+        )
 
     def mark_update_active(
         self,
@@ -222,6 +406,18 @@ class UpdateEngine:
                 self._active_updates.pop(service_id, None)
 
     def active_update(self, service_id: str) -> dict[str, Any] | None:
+        if service_id == "patchdeck":
+            state = self.load_self_update_state()
+            if state and state.get("service_id") == service_id:
+                if state.get("in_progress") and self.self_update_in_progress():
+                    return {
+                        "source": state.get("source"),
+                        "started_at": state.get("started_at"),
+                        "phase": state.get("phase"),
+                        "update_percentage": state.get("update_percentage"),
+                    }
+                with self._active_lock:
+                    self._active_updates.pop(service_id, None)
         with self._active_lock:
             state = self._active_updates.get(service_id)
             return dict(state) if state else None
@@ -474,6 +670,272 @@ def run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple
         return proc.returncode, "\n".join(part for part in [proc.stdout, proc.stderr] if part).strip()
     except Exception as exc:
         return 1, str(exc)
+
+
+def split_compose_files(compose_file: str) -> list[str]:
+    files = [item.strip() for item in compose_file.split(",") if item.strip()]
+    if not files:
+        raise ValueError("Compose file is not configured.")
+    for item in files:
+        if any(char in item for char in ("\x00", "\r", "\n")):
+            raise ValueError("Compose file path contains invalid characters.")
+    return files
+
+
+def compose_command(compose_files: list[str], *args: str) -> list[str]:
+    cmd = [DOCKER_BIN, "compose"]
+    for item in compose_files:
+        cmd.extend(["-f", item])
+    cmd.extend(args)
+    return cmd
+
+
+def append_audit_log(state_dir: Path, event: str, **fields: object) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": event, **fields}
+    with (state_dir / "audit.log").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def save_last_run_file(path: Path, service_id: str, payload: dict[str, Any]) -> None:
+    data = load_json(path, {})
+    if not isinstance(data, dict):
+        data = {}
+    data[service_id] = payload
+    atomic_json(path, data)
+
+
+def docker_container_runtime_state(container: str) -> tuple[dict[str, Any] | None, str]:
+    details, error = docker_container_details(container)
+    if details is None:
+        return None, error
+    state = details.get("State")
+    return state if isinstance(state, dict) else {}, ""
+
+
+def docker_container_details(container: str) -> tuple[dict[str, Any] | None, str]:
+    code, out = run_cmd([DOCKER_BIN, "inspect", container], timeout=15)
+    if code != 0:
+        return None, out
+    try:
+        payload = json.loads(out)
+        details = payload[0] if isinstance(payload, list) and payload else {}
+        return (details, "") if isinstance(details, dict) else (None, "Docker inspect returned an invalid payload.")
+    except Exception as exc:
+        return None, str(exc)
+
+
+def wait_for_container_health(container: str, timeout: int = 300, poll_interval: float = 2.0) -> tuple[int, str]:
+    deadline = time.time() + timeout
+    last_state = "container not inspected yet"
+    while time.time() < deadline:
+        state, error = docker_container_runtime_state(container)
+        if state is None:
+            last_state = error or "container not found"
+        else:
+            status = str(state.get("Status") or "unknown")
+            health = state.get("Health") or {}
+            health_status = str(health.get("Status") or "")
+            if health_status == "healthy":
+                return 0, f"{container} is healthy."
+            if health_status == "unhealthy":
+                return 1, f"{container} is unhealthy."
+            if not health_status and status == "running":
+                return 0, f"{container} is running without Docker health status."
+            if status in {"dead", "exited"}:
+                return 1, f"{container} is {status}."
+            last_state = f"status={status}, health={health_status or 'none'}"
+        time.sleep(poll_interval)
+    return 1, f"Timed out waiting for {container} health. Last state: {last_state}"
+
+
+def validate_self_update_job(job: Any) -> dict[str, str]:
+    if not isinstance(job, dict):
+        raise ValueError("Self-update job payload is invalid.")
+    validated: dict[str, str] = {}
+    required_fields = (
+        "job_id",
+        "helper_container",
+        "service_id",
+        "source",
+        "data_dir",
+        "container",
+        "compose_file",
+        "compose_project_dir",
+        "compose_service",
+    )
+    for field in required_fields:
+        value = job.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Self-update job field {field!r} is missing.")
+        validated[field] = value.strip()
+    if validated["service_id"] != "patchdeck":
+        raise ValueError("Self-update helper may only update the patchdeck service.")
+    if not SELF_UPDATE_JOB_ID_RE.fullmatch(validated["job_id"]):
+        raise ValueError("Self-update job id is invalid.")
+    if validated["helper_container"] != f"{SELF_UPDATE_HELPER_PREFIX}{validated['job_id']}":
+        raise ValueError("Self-update helper container name is invalid.")
+    for field in ("helper_container", "container", "compose_service"):
+        if not SAFE_DOCKER_NAME_RE.fullmatch(validated[field]):
+            raise ValueError(f"Self-update job field {field!r} is invalid.")
+    split_compose_files(validated["compose_file"])
+    for field in ("data_dir", "compose_project_dir"):
+        if any(char in validated[field] for char in ("\x00", "\r", "\n")):
+            raise ValueError(f"Self-update job field {field!r} contains invalid characters.")
+        if not Path(validated[field]).is_absolute():
+            raise ValueError(f"Self-update job field {field!r} must be an absolute path.")
+    if any(not Path(item).is_absolute() for item in split_compose_files(validated["compose_file"])):
+        raise ValueError("Self-update Compose files must use absolute paths.")
+    started_at = job.get("started_at")
+    if isinstance(started_at, int):
+        validated["started_at"] = str(started_at)
+    else:
+        validated["started_at"] = str(int(time.time()))
+    return validated
+
+
+def fail_self_update_job(job_path: Path, raw_job: Any, error: str) -> int:
+    state_dir = job_path.parent
+    now = int(time.time())
+    source = raw_job.get("source") if isinstance(raw_job, dict) and isinstance(raw_job.get("source"), str) else "unknown"
+    job_id = raw_job.get("job_id") if isinstance(raw_job, dict) and isinstance(raw_job.get("job_id"), str) else None
+    helper_container = raw_job.get("helper_container") if isinstance(raw_job, dict) and isinstance(raw_job.get("helper_container"), str) else None
+    state = {
+        "service_id": "patchdeck",
+        "source": source,
+        "job_id": job_id,
+        "helper_container": helper_container,
+        "started_at": raw_job.get("started_at", now) if isinstance(raw_job, dict) else now,
+        "in_progress": False,
+        "phase": "Validation failed",
+        "update_percentage": 5,
+        "ok": False,
+        "exit_code": 1,
+        "finished_at": now,
+    }
+    atomic_json(state_dir / "self-update-state.json", state)
+    save_last_run_file(state_dir / "last-runs.json", "patchdeck", {
+        "ts": now,
+        "ok": False,
+        "exit_code": 1,
+        "source": source,
+        "output": error[-2000:],
+        "job_id": job_id,
+    })
+    append_audit_log(
+        state_dir,
+        "self_update_helper_invalid",
+        error=error,
+        job_file=str(job_path),
+        job_id=job_id,
+        helper_container=helper_container,
+    )
+    try:
+        job_path.unlink()
+    except FileNotFoundError:
+        pass
+    return 1
+
+
+def run_self_update_helper(job_file: str) -> int:
+    job_path = Path(job_file)
+    raw_job = load_json(job_path, {})
+    try:
+        job = validate_self_update_job(raw_job)
+    except Exception as exc:
+        return fail_self_update_job(job_path, raw_job, str(exc))
+
+    state_dir = Path(job["data_dir"])
+    if job_path.parent.resolve() != state_dir.resolve():
+        return fail_self_update_job(job_path, raw_job, "Job file is outside the Patchdeck data directory.")
+    details, error = docker_container_details(job["container"])
+    if details is None:
+        return fail_self_update_job(job_path, raw_job, f"Target container inspection failed: {error}")
+    labels = ((details.get("Config") or {}).get("Labels") or {})
+    expected_files = split_compose_files(job["compose_file"])
+    detected_files = split_compose_files(str(labels.get("com.docker.compose.project.config_files") or ""))
+    if (
+        detected_files != expected_files
+        or str(labels.get("com.docker.compose.project.working_dir") or "") != job["compose_project_dir"]
+        or str(labels.get("com.docker.compose.service") or "") != job["compose_service"]
+    ):
+        return fail_self_update_job(job_path, raw_job, "Target container Compose labels do not match the recorded job scope.")
+    state_file = state_dir / "self-update-state.json"
+    last_run_file = state_dir / "last-runs.json"
+    started_at = int(job["started_at"])
+    compose_files = split_compose_files(job["compose_file"])
+    pull = compose_command(compose_files, "pull", job["compose_service"])
+    up = compose_command(compose_files, "up", "-d", "--no-deps", job["compose_service"])
+
+    def write_state(phase: str, update_percentage: int, in_progress: bool, **extra: object) -> None:
+        atomic_json(state_file, {
+            **job,
+            "started_at": started_at,
+            "in_progress": in_progress,
+            "phase": phase,
+            "update_percentage": update_percentage,
+            **extra,
+        })
+
+    def finish(ok: bool, exit_code: int, phase: str, output: str) -> int:
+        finished_at = int(time.time())
+        write_state(
+            phase,
+            100 if ok else 95,
+            False,
+            ok=ok,
+            exit_code=exit_code,
+            finished_at=finished_at,
+        )
+        save_last_run_file(last_run_file, "patchdeck", {
+            "ts": finished_at,
+            "ok": ok,
+            "exit_code": exit_code,
+            "source": job["source"],
+            "output": output[-2000:],
+            "job_id": job["job_id"],
+        })
+        append_audit_log(
+            state_dir,
+            "update_done",
+            service="patchdeck",
+            source=job["source"],
+            ok=ok,
+            exit_code=exit_code,
+            job_id=job["job_id"],
+            helper_container=job["helper_container"],
+            output=output[-1200:],
+        )
+        try:
+            job_path.unlink()
+        except FileNotFoundError:
+            pass
+        return exit_code
+
+    append_audit_log(
+        state_dir,
+        "self_update_helper_started",
+        service="patchdeck",
+        source=job["source"],
+        job_id=job["job_id"],
+        helper_container=job["helper_container"],
+    )
+    write_state("Pulling image", 50, True)
+    code1, out1 = run_cmd(pull, cwd=job["compose_project_dir"], timeout=300)
+    if code1 != 0:
+        return finish(False, code1, "Pull failed", "$ " + " ".join(pull) + "\n" + out1)
+
+    write_state("Recreating", 90, True)
+    code2, out2 = run_cmd(up, cwd=job["compose_project_dir"], timeout=300)
+    if code2 != 0:
+        return finish(False, code2, "Recreate failed", "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2)
+
+    write_state("Waiting for healthy container", 95, True)
+    code3, out3 = wait_for_container_health(job["container"], timeout=300)
+    output = "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2 + "\n" + out3
+    if code3 != 0:
+        return finish(False, code3, "Health check failed", output)
+    return finish(True, 0, "Completed", output)
 
 
 def format_release_notes_url(template: str, version: str) -> str:
@@ -922,3 +1384,16 @@ def mqtt_subscribe(sock: socket.socket, topic: str, audit: Any) -> bool:
     if not ok:
         audit("mqtt_subscribe_failed", topic=topic, packet=list(packet[1]) if packet else [])
     return ok
+
+
+def main_cli(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if len(args) == 2 and args[0] == "self-update-helper":
+        return run_self_update_helper(args[1])
+    if args:
+        print("Usage: python -m patchdeck.update_engine self-update-helper <job-file>", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main_cli())

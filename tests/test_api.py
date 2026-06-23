@@ -10,11 +10,13 @@ from patchdeck.models import ServiceConfig, ServiceStatus, Settings
 from patchdeck.store import JsonStore
 from patchdeck.update_engine import (
     UpdateEngine,
+    UpdateRunResult,
     effective_settings,
     format_release_notes_url,
     mqtt_cleanup_messages,
     mqtt_enabled,
     mqtt_publish_discovery,
+    run_self_update_helper,
 )
 
 
@@ -64,10 +66,10 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.3.3" in settings_response.text
-    assert '/static/favicon.png?v0.3.3-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.3.3-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.3.3-logo4' in index_response.text
+    assert "Patchdeck 0.3.4" in settings_response.text
+    assert '/static/favicon.png?v0.3.4-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.3.4-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.3.4-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -217,7 +219,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.3.3-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.3.4-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -564,43 +566,126 @@ def test_patchdeck_image_version_label_is_used_for_display(tmp_path, monkeypatch
     assert status.release_notes_url == "https://github.com/bxjrke/patchdeck/releases"
 
 
-def test_patchdeck_self_update_recreate_runs_detached(tmp_path, monkeypatch) -> None:
+def test_patchdeck_self_update_runs_in_ephemeral_helper_container(tmp_path, monkeypatch) -> None:
     engine = UpdateEngine(JsonStore(tmp_path))
-    popen_calls = []
+    commands = []
     published = []
+    monkeypatch.setenv("PATCHDECK_CONTAINER", "patchdeck-runtime-id")
 
     def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
-        assert args == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "pull", "patchdeck"]
-        assert cwd == "/srv/patchdeck"
-        return 0, "pulled"
-
-    def fake_popen(args, **kwargs):
-        popen_calls.append((args, kwargs))
-        return object()
+        commands.append((args, cwd, timeout))
+        if args == [update_engine.DOCKER_BIN, "inspect", "patchdeck-runtime-id"]:
+            return 0, json.dumps([{
+                "Name": "/patchdeck",
+                "Config": {
+                    "Image": "ghcr.io/bxjrke/patchdeck:main",
+                    "Labels": {
+                        "com.docker.compose.project.config_files": "/srv/patchdeck/docker-compose.yml",
+                        "com.docker.compose.project.working_dir": "/srv/patchdeck",
+                        "com.docker.compose.service": "patchdeck",
+                    },
+                },
+            }])
+        return 0, "helper-123"
 
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(update_engine.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(engine, "publish_service_state", lambda service, **state: published.append((service.id, state)))
 
-    code, output = engine.run_update(
+    result = engine.run_update(
         ServiceConfig(
             id="patchdeck",
             name="Patchdeck",
+            container="patchdeck",
+            image="ghcr.io/bxjrke/patchdeck:main",
             compose_file="/srv/patchdeck/docker-compose.yml",
             compose_project_dir="/srv/patchdeck",
             compose_service="patchdeck",
-        )
+        ),
+        source="web",
     )
 
-    assert code == 0
-    assert "Self-update recreate started" in output
-    assert popen_calls[0][0] == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "up", "-d", "--no-deps", "patchdeck"]
-    assert popen_calls[0][1]["cwd"] == "/srv/patchdeck"
-    assert popen_calls[0][1]["start_new_session"] is True
-    assert published == [
-        ("patchdeck", {"in_progress": True, "update_percentage": 50}),
-        ("patchdeck", {"in_progress": True, "update_percentage": 90}),
+    assert result.exit_code == 0
+    assert result.deferred is True
+    assert "self-update-helper" in result.output
+    cmd, cwd, timeout = commands[1]
+    assert cwd is None
+    assert timeout == 90
+    assert cmd[:8] == [
+        update_engine.DOCKER_BIN,
+        "run",
+        "--rm",
+        "--detach",
+        "--name",
+        cmd[5],
+        "--volumes-from",
+        "patchdeck-runtime-id",
     ]
+    assert cmd[5].startswith("patchdeck-self-update-helper-")
+    assert cmd[8:] == [
+        "--entrypoint",
+        "python",
+        "ghcr.io/bxjrke/patchdeck:main",
+        "-m",
+        "patchdeck.update_engine",
+        "self-update-helper",
+        cmd[-1],
+    ]
+    job = json.loads(Path(cmd[-1]).read_text(encoding="utf-8"))
+    assert job["service_id"] == "patchdeck"
+    assert job["compose_service"] == "patchdeck"
+    assert job["compose_project_dir"] == "/srv/patchdeck"
+    state = json.loads((tmp_path / "self-update-state.json").read_text(encoding="utf-8"))
+    assert state["in_progress"] is True
+    assert state["phase"] == "Starting helper container"
+    assert published == [
+        ("patchdeck", {"in_progress": True, "update_percentage": 5}),
+    ]
+
+
+def test_patchdeck_self_update_ignores_retargeted_stored_container(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    commands = []
+    monkeypatch.setenv("PATCHDECK_CONTAINER", "real-patchdeck-id")
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        commands.append(args)
+        if args == [update_engine.DOCKER_BIN, "inspect", "real-patchdeck-id"]:
+            return 0, json.dumps([{
+                "Name": "/patchdeck",
+                "Config": {
+                    "Image": "ghcr.io/bxjrke/patchdeck:main",
+                    "Labels": {
+                        "com.docker.compose.project.config_files": "/srv/patchdeck/docker-compose.yml",
+                        "com.docker.compose.project.working_dir": "/srv/patchdeck",
+                        "com.docker.compose.service": "patchdeck",
+                    },
+                },
+            }])
+        return 0, "helper-id"
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(engine, "publish_service_state", lambda *args, **kwargs: None)
+
+    result = engine.run_update(
+        ServiceConfig(
+            id="patchdeck",
+            name="Patchdeck",
+            container="foreign-database",
+            image="example/foreign:latest",
+            compose_file="/srv/foreign/compose.yml",
+            compose_project_dir="/srv/foreign",
+            compose_service="database",
+        ),
+        source="web",
+    )
+
+    assert result.exit_code == 0
+    docker_run = commands[1]
+    assert docker_run[docker_run.index("--volumes-from") + 1] == "real-patchdeck-id"
+    job = json.loads(Path(docker_run[-1]).read_text(encoding="utf-8"))
+    assert job["container"] == "patchdeck"
+    assert job["compose_service"] == "patchdeck"
+    assert job["compose_file"] == "/srv/patchdeck/docker-compose.yml"
 
 
 def test_compose_update_publishes_phase_progress(tmp_path, monkeypatch) -> None:
@@ -615,7 +700,7 @@ def test_compose_update_publishes_phase_progress(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
     monkeypatch.setattr(engine, "publish_service_state", lambda service, **state: published.append((service.id, state)))
 
-    code, output = engine.run_update(
+    result = engine.run_update(
         ServiceConfig(
             id="homeassistant",
             name="Home Assistant",
@@ -625,8 +710,8 @@ def test_compose_update_publishes_phase_progress(tmp_path, monkeypatch) -> None:
         )
     )
 
-    assert code == 0
-    assert "$ " + " ".join(commands[0]) in output
+    assert result.exit_code == 0
+    assert "$ " + " ".join(commands[0]) in result.output
     assert commands == [
         [update_engine.DOCKER_BIN, "compose", "-f", "/srv/homeassistant/compose.yaml", "pull", "homeassistant"],
         [update_engine.DOCKER_BIN, "compose", "-f", "/srv/homeassistant/compose.yaml", "up", "-d", "--no-deps", "homeassistant"],
@@ -763,7 +848,7 @@ def test_update_lifecycle_publishes_mqtt_progress(tmp_path, monkeypatch) -> None
     published = []
 
     monkeypatch.setattr(engine, "publish_service_state", lambda service, **state: published.append((service.id, state)))
-    monkeypatch.setattr(engine, "run_update", lambda service: (0, "updated"))
+    monkeypatch.setattr(engine, "run_update", lambda service, source="unknown": UpdateRunResult(0, "updated"))
 
     ok, message = engine.perform_update(service, "mqtt")
 
@@ -773,6 +858,102 @@ def test_update_lifecycle_publishes_mqtt_progress(tmp_path, monkeypatch) -> None
         ("homeassistant", {"in_progress": True, "update_percentage": 0}),
         ("homeassistant", {"in_progress": False, "update_percentage": None}),
     ]
+
+
+def test_patchdeck_active_update_reads_persistent_helper_state(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    (tmp_path / "self-update-state.json").write_text(json.dumps({
+        "job_id": "1782200000-a1b2c3d4",
+        "helper_container": "patchdeck-self-update-helper-1782200000-a1b2c3d4",
+        "service_id": "patchdeck",
+        "source": "web",
+        "started_at": 1782200000,
+        "phase": "Waiting for healthy container",
+        "update_percentage": 95,
+        "in_progress": True,
+    }), encoding="utf-8")
+    monkeypatch.setattr(update_engine, "run_cmd", lambda *args, **kwargs: (0, "running"))
+
+    assert engine.active_update("patchdeck") == {
+        "source": "web",
+        "started_at": 1782200000,
+        "phase": "Waiting for healthy container",
+        "update_percentage": 95,
+    }
+
+
+def test_self_update_helper_persists_success_result(tmp_path, monkeypatch) -> None:
+    job_file = tmp_path / "self-update-job.json"
+    job_file.write_text(json.dumps({
+        "job_id": "1782200000-a1b2c3d4",
+        "helper_container": "patchdeck-self-update-helper-1782200000-a1b2c3d4",
+        "service_id": "patchdeck",
+        "source": "web",
+        "started_at": 123,
+        "data_dir": str(tmp_path),
+        "container": "patchdeck",
+        "compose_file": "/srv/patchdeck/docker-compose.yml",
+        "compose_project_dir": "/srv/patchdeck",
+        "compose_service": "patchdeck",
+    }), encoding="utf-8")
+    inspect_calls = {"count": 0}
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        if args == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "pull", "patchdeck"]:
+            return 0, "pulled"
+        if args == [update_engine.DOCKER_BIN, "compose", "-f", "/srv/patchdeck/docker-compose.yml", "up", "-d", "--no-deps", "patchdeck"]:
+            return 0, "recreated"
+        if args == [update_engine.DOCKER_BIN, "inspect", "patchdeck"]:
+            inspect_calls["count"] += 1
+            health = "starting" if inspect_calls["count"] == 1 else "healthy"
+            return 0, json.dumps([{
+                "Config": {
+                    "Labels": {
+                        "com.docker.compose.project.config_files": "/srv/patchdeck/docker-compose.yml",
+                        "com.docker.compose.project.working_dir": "/srv/patchdeck",
+                        "com.docker.compose.service": "patchdeck",
+                    },
+                },
+                "State": {"Status": "running", "Health": {"Status": health}},
+            }])
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(update_engine.time, "sleep", lambda _seconds: None)
+
+    code = run_self_update_helper(str(job_file))
+
+    assert code == 0
+    state = json.loads((tmp_path / "self-update-state.json").read_text(encoding="utf-8"))
+    assert state["in_progress"] is False
+    assert state["ok"] is True
+    assert state["phase"] == "Completed"
+    last_runs = json.loads((tmp_path / "last-runs.json").read_text(encoding="utf-8"))
+    assert last_runs["patchdeck"]["ok"] is True
+    assert "docker compose -f /srv/patchdeck/docker-compose.yml pull patchdeck" in last_runs["patchdeck"]["output"]
+    assert job_file.exists() is False
+
+
+def test_self_update_helper_validation_failure_finalizes_state(tmp_path) -> None:
+    job_file = tmp_path / "self-update-job-invalid.json"
+    job_file.write_text(json.dumps({
+        "job_id": "not-valid",
+        "helper_container": "patchdeck-self-update-helper-not-valid",
+        "service_id": "patchdeck",
+        "source": "web",
+        "started_at": 123,
+    }), encoding="utf-8")
+
+    code = run_self_update_helper(str(job_file))
+
+    assert code == 1
+    assert job_file.exists() is False
+    state = json.loads((tmp_path / "self-update-state.json").read_text(encoding="utf-8"))
+    assert state["in_progress"] is False
+    assert state["ok"] is False
+    assert state["phase"] == "Validation failed"
+    last_runs = json.loads((tmp_path / "last-runs.json").read_text(encoding="utf-8"))
+    assert last_runs["patchdeck"]["ok"] is False
 
 
 def test_disabling_mqtt_clears_retained_entities(tmp_path, monkeypatch) -> None:

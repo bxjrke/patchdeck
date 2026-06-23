@@ -188,10 +188,12 @@ def ensure_self_service() -> None:
 
 
 def enrich_service_from_docker(service: ServiceConfig) -> ServiceConfig:
-    if not service.container:
+    runtime_container = (os.environ.get("PATCHDECK_CONTAINER") or os.environ.get("HOSTNAME")) if service.id == "patchdeck" else None
+    container = runtime_container or service.container
+    if not container:
         return service
     try:
-        detected = service_from_container(service.container, service)
+        detected = service_from_container(container, service)
     except Exception:
         return service
     data = service.model_dump()

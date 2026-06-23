@@ -19,7 +19,7 @@ The image contains:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.3.3
+    image: ghcr.io/bxjrke/patchdeck:0.3.4
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -51,6 +51,8 @@ The host path can be any persistent directory you choose, for example `/opt/dock
 
 If you only want Patchdeck to discover containers and show update status at first, you can omit the Compose-files mount. Add it later when you want Patchdeck to run `docker compose pull` and `docker compose up` for selected services.
 
+Patchdeck self-updates do not require a second long-running service. When you trigger a Patchdeck update from the UI, Patchdeck starts a temporary helper container through the mounted Docker socket. That helper inherits Patchdeck's mounts with `--volumes-from`, updates only the detected Patchdeck Compose service, waits for the replacement container to become healthy, writes the result to `/data`, and removes itself automatically.
+
 ## MQTT
 
 MQTT stays disabled unless it is enabled in the settings UI or with `PATCHDECK_MQTT_ENABLED=true`. Setting `PATCHDECK_MQTT_HOST` alone configures the host but does not enable MQTT publishing.
@@ -74,7 +76,7 @@ Recommended deployment:
 
 The release workflow publishes:
 
-- `ghcr.io/bxjrke/patchdeck:0.3.3` for version tags like `v0.3.3`
+- `ghcr.io/bxjrke/patchdeck:0.3.4` for version tags like `v0.3.4`
 - `ghcr.io/bxjrke/patchdeck:0.3` for the matching minor line
 - `ghcr.io/bxjrke/patchdeck:main` for pushes to `main`
 - `ghcr.io/bxjrke/patchdeck:sha-...` for immutable commit images
