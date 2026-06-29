@@ -45,9 +45,9 @@ Patchdeck is a Docker-only web UI for manually updating selected containers. It 
 ## Internationalization
 
 - [x] English and German UI strings exist.
-- [ ] Move translations out of inline JavaScript into standalone language files.
-- [ ] Document how to add a new language by pull request.
-- [ ] Ensure source code and default UI copy are English-only.
+- [x] Move translations out of inline JavaScript into standalone language files.
+- [x] Document how to add a new language by pull request.
+- [x] Ensure source code and default UI copy are English-only.
 
 ## Later
 

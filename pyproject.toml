@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patchdeck"
-version = "0.3.4"
+version = "0.3.5"
 description = "A service-oriented homelab update hub"
 readme = "README.md"
 license = "MIT"
@@ -25,4 +25,4 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-patchdeck = ["static/*.svg", "static/*.png"]
+patchdeck = ["static/*.svg", "static/*.png", "static/i18n/*.json"]

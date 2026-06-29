@@ -222,7 +222,7 @@ def page_html(active: str) -> str:
     content = HOME_VIEW if active == "home" else SETTINGS_VIEW
     script = COMMON_JS + (HOME_JS if active == "home" else SETTINGS_JS)
     return f'''<!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -236,13 +236,13 @@ def page_html(active: str) -> str:
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <p class="eyebrow">Homelab Update Control</p>
+        <p class="eyebrow" data-i18n="tagline">Homelab Update Control</p>
         <div class="brand-row">
-          <a class="title-link" href="/" aria-label="Patchdeck home"><h1>Patchdeck</h1></a>
+          <a class="title-link" href="/" aria-label="Patchdeck home" data-i18n-aria-label="patchdeckHome"><h1>Patchdeck</h1></a>
           <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i><span data-i18n="settings">Settings</span></a>
         </div>
       </div>
-      <div class="summary" aria-label="Service overview actions">
+      <div class="summary" aria-label="Service overview actions" data-i18n-aria-label="serviceOverviewActions">
         <span id="summary-services" class="summary-pill">0 services</span>
         <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" onclick="refreshAllServices()" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
@@ -280,7 +280,7 @@ SETTINGS_VIEW = '''
         <div class="grid settings-grid">
           <label><span data-i18n="updateInterval">Update check interval</span><span class="input-suffix"><input id="update-interval" type="number" min="1"><span>min</span></span></label>
           <label><span data-i18n="baseUrl">Base URL</span><input id="base-url" placeholder="https://patchdeck.example"></label>
-          <label><span data-i18n="language">Language</span><select id="language"><option value="de">Deutsch</option><option value="en">English</option></select></label>
+          <label><span data-i18n="language">Language</span><select id="language"><option value="en">English</option><option value="de">German</option></select></label>
         </div>
       </section>
 
@@ -310,7 +310,7 @@ SETTINGS_VIEW = '''
           </div>
         </div>
         <div class="grid settings-grid">
-          <label><span data-i18n="theme">Color scheme</span><select id="theme"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+          <label><span data-i18n="theme">Color scheme</span><select id="theme"><option value="system" data-i18n="themeSystem">System</option><option value="dark" data-i18n="themeDark">Dark</option><option value="light" data-i18n="themeLight">Light</option></select></label>
         </div>
       </section>
 
@@ -351,7 +351,7 @@ SETTINGS_VIEW = '''
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="container"></i></div>
             <h2 data-i18n="dockerImport">Docker Import</h2>
           </div>
-          <span class="badge ok">Read-only</span>
+          <span class="badge ok" data-i18n="readOnly">Read-only</span>
         </div>
         <p data-i18n="dockerImportIntro">The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.</p>
         <div class="actions compact"><button type="button" onclick="loadDockerCandidates()"><i data-lucide="scan-line" aria-hidden="true"></i><span data-i18n="scanDocker">Scan Docker</span></button></div>
@@ -488,41 +488,40 @@ COMMON_JS = r'''
 const api = (path, options = {}) => fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
 const text = value => String(value ?? '');
 const esc = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-let currentLanguage = 'de';
-const I18N = {
-  de: {
-    footer: 'Vorschauversion. Updates werden nur gezielt pro Dienst ausgeführt.', serviceSingular: 'Dienst', servicePlural: 'Dienste',
-    settingsGeneral: 'Allgemein', global: 'Global', updateInterval: 'Update-Check-Intervall', baseUrl: 'Basis-URL', language: 'Sprache',
-    mqttEnabled: 'MQTT', mqttHost: 'MQTT Host', mqttPort: 'MQTT Port', mqttUser: 'MQTT User', mqttPassword: 'MQTT Passwort', mqttPrefix: 'MQTT Discovery Prefix', mqttTopic: 'MQTT Base Topic',
-    display: 'Darstellung', theme: 'Farbschema',
-    saveSettings: 'Speichern', services: 'Dienste', configuration: 'Konfiguration', createService: 'Dienst anlegen', manual: 'Manuell', name: 'Anzeigename', manualUpdateAction: 'Update-Aktion anzeigen',
-    container: 'Container Name', image: 'Image', composeFile: 'Compose-Datei', composeProject: 'Compose Projektordner', composeService: 'Compose Service', iconSlug: 'Icon-Name', iconPath: 'Icon Pfad', iconHelpTitle: 'Icons', iconHelp: 'Patchdeck erkennt Icons automatisch aus Container und Image und speichert gefundene Dateien lokal. Bei Bedarf kann ein Icon Pfad gesetzt werden.', releaseNotesField: 'Release Notes Quelle',
-    releaseNotesHelp: 'Optional. Nutze homeassistant für die eingebaute Home-Assistant-Erkennung oder trage eine URL ein. In URLs kann {version} durch die gefundene Version ersetzt werden.',
-    saveService: 'Dienst speichern', dockerImport: 'Docker Import', dockerImportIntro: 'Der Scan ist immer manuell möglich. Patchdeck liest Container, Image und Compose-Labels nur aus und legt erst nach Klick auf Import einen Dienst an.', scanDocker: 'Docker scannen', dockerScanStart: 'Docker Scan starten, um Container zu importieren.',
-    loadingServices: 'Lade Dienste...', noServices: 'Noch keine Dienste konfiguriert.', settings: 'Einstellungen', overview: 'Übersicht', refreshUpdates: 'Aktualisieren', refreshRunning: 'Aktualisiere', releaseNotes: 'Release Notes', installed: 'Installiert', available: 'Verfügbar', notChecked: 'Noch nicht geprüft', updateRunning: 'Update läuft', incomplete: 'Unvollständig', updateAvailable: 'Update verfügbar', upToDate: 'Aktuell', startUpdate: 'Update starten', lastUpdate: 'Letztes Update', success: 'Erfolg', error: 'Fehler', updateStarting: 'Update wird gestartet', updateAllowed: 'Update erlaubt', save: 'Speichern', delete: 'Löschen', add: 'Hinzufügen', edit: 'Einstellungen öffnen', refresh: 'Aus Docker aktualisieren', technicalDetails: 'Erkannte Docker-Details',
-    active: 'Aktiv', inactive: 'Inaktiv', dockerScanning: 'Docker wird gescannt...', dockerScanFailed: 'Docker Scan fehlgeschlagen.', dockerCandidates: ' Docker Kandidaten', noContainers: 'Keine Docker Container gefunden.', compose: 'Compose', imported: 'Importiert', import: 'Import'
-  },
-  en: {
-    footer: 'Preview build. Updates run only when triggered for a configured service.', serviceSingular: 'service', servicePlural: 'services',
-    settingsGeneral: 'General', global: 'Global', updateInterval: 'Update check interval', baseUrl: 'Base URL', language: 'Language',
-    mqttEnabled: 'MQTT', mqttHost: 'MQTT host', mqttPort: 'MQTT port', mqttUser: 'MQTT user', mqttPassword: 'MQTT password', mqttPrefix: 'MQTT discovery prefix', mqttTopic: 'MQTT base topic',
-    display: 'Display', theme: 'Color scheme',
-    saveSettings: 'Save', services: 'Services', configuration: 'Configuration', createService: 'Create service', manual: 'Manual', name: 'Display name', manualUpdateAction: 'Show update action',
-    container: 'Container name', image: 'Image', composeFile: 'Compose file', composeProject: 'Compose project folder', composeService: 'Compose service', iconSlug: 'Icon name', iconPath: 'Icon path', iconHelpTitle: 'Icons', iconHelp: 'Patchdeck detects icons from container and image automatically and stores found files locally. Set an icon path when you want to override it.', releaseNotesField: 'Release notes source',
-    releaseNotesHelp: 'Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.',
-    saveService: 'Save service', dockerImport: 'Docker import', dockerImportIntro: 'The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.', scanDocker: 'Scan Docker', dockerScanStart: 'Start a Docker scan to import containers.',
-    loadingServices: 'Loading services...', noServices: 'No services configured yet.', settings: 'Settings', overview: 'Overview', refreshUpdates: 'Refresh', refreshRunning: 'Refreshing', releaseNotes: 'Release notes', installed: 'Installed', available: 'Available', notChecked: 'Not checked yet', updateRunning: 'Update running', incomplete: 'Incomplete', updateAvailable: 'Update available', upToDate: 'Up to date', startUpdate: 'Start update', lastUpdate: 'Last update', success: 'Success', error: 'Error', updateStarting: 'Starting update', updateAllowed: 'Updates allowed', save: 'Save', delete: 'Delete', add: 'Add', edit: 'Open settings', refresh: 'Refresh from Docker', technicalDetails: 'Detected Docker details',
-    active: 'Active', inactive: 'Inactive', dockerScanning: 'Scanning Docker...', dockerScanFailed: 'Docker scan failed.', dockerCandidates: ' Docker candidates', noContainers: 'No Docker containers found.', compose: 'Compose', imported: 'Imported', import: 'Import'
+let currentLanguage = 'en';
+const I18N = {};
+
+async function loadTranslations(language) {
+  if (I18N[language]) return;
+  const response = await fetch('/static/i18n/' + encodeURIComponent(language) + '.json');
+  if (!response.ok) throw new Error('Translation file not found: ' + language);
+  I18N[language] = await response.json();
+}
+
+async function selectLanguage(language) {
+  await loadTranslations('en');
+  if (language && language !== 'en') {
+    try {
+      await loadTranslations(language);
+      currentLanguage = language;
+      return;
+    } catch {
+      currentLanguage = 'en';
+      return;
+    }
   }
-};
+  currentLanguage = 'en';
+}
+
 function tr(key) {
-  return (I18N[currentLanguage] && I18N[currentLanguage][key]) || I18N.de[key] || key;
+  return (I18N[currentLanguage] && I18N[currentLanguage][key]) || (I18N.en && I18N.en[key]) || key;
 }
 
 function applyI18n() {
   document.documentElement.lang = currentLanguage;
   document.querySelectorAll('[data-i18n]').forEach(node => node.textContent = tr(node.dataset.i18n));
   document.querySelectorAll('[data-i18n-title]').forEach(node => node.title = tr(node.dataset.i18nTitle));
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(node => node.setAttribute('aria-label', tr(node.dataset.i18nAriaLabel)));
 }
 
 function applyTheme(theme) {
@@ -571,10 +570,11 @@ async function refreshAllServices() {
 async function loadLanguagePreference() {
   try {
     const settings = await (await api('/api/settings')).json();
-    currentLanguage = settings.language || 'de';
     applyTheme(settings.theme);
+    await selectLanguage(settings.language || 'en');
     applyI18n();
   } catch {
+    await selectLanguage('en');
     applyI18n();
   }
 }
@@ -629,11 +629,11 @@ function renderServiceCards(statuses) {
       '</div>' +
       '<div class="grid">' +
         '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(service.container) + '</strong></div>' +
-        '<div><span>Status</span><strong data-role="container-state">' + esc(service.state) + '</strong></div>' +
+        '<div><span>' + esc(tr('status')) + '</span><strong data-role="container-state">' + esc(service.state) + '</strong></div>' +
         '<div><span>' + esc(tr('installed')) + '</span><strong>' + esc(service.current_version || tr('notChecked')) + '</strong></div>' +
         '<div><span>' + esc(tr('available')) + '</span><strong>' + availableVersion + '</strong></div>' +
       '</div>' +
-      '<details><summary>Image</summary><code>' + esc(service.image || '—') + '</code></details>' +
+      '<details><summary>' + esc(tr('image')) + '</summary><code>' + esc(service.image || '—') + '</code></details>' +
       lastRun +
     '</section>';
   }).join('');
@@ -641,7 +641,8 @@ function renderServiceCards(statuses) {
 
 function formatTs(value) {
   if (!value) return '—';
-  return new Date(Number(value) * 1000).toLocaleString('de-DE', {dateStyle: 'short', timeStyle: 'short'});
+  const locale = currentLanguage === 'de' ? 'de-DE' : 'en-US';
+  return new Date(Number(value) * 1000).toLocaleString(locale, {dateStyle: 'short', timeStyle: 'short'});
 }
 
 function versionHtml(value, releaseUrl) {
@@ -698,8 +699,8 @@ async function loadSettingsPage() {
 
 async function loadSettings() {
   const data = await (await api('/api/settings')).json();
-  currentLanguage = data.language || 'de';
   applyTheme(data.theme);
+  await selectLanguage(data.language || 'en');
   applyI18n();
   await getServices();
   document.querySelector('#update-interval').value = data.update_interval_minutes;
@@ -722,8 +723,8 @@ function renderSaveButtons() {
 }
 
 function wireAutosaveSettings() {
-  document.querySelector('#language').addEventListener('change', event => {
-    currentLanguage = event.target.value;
+  document.querySelector('#language').addEventListener('change', async event => {
+    await selectLanguage(event.target.value);
     applyI18n();
     updateMqttVisibility();
     renderSaveButtons();
@@ -937,7 +938,7 @@ async function loadDockerCandidates() {
   target.innerHTML = candidates.map(candidate =>
     '<div class="candidate">' +
       '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(candidate.name) + '</strong><code>' + esc(candidate.id) + '</code></div>' +
-      '<div><span>Image</span><strong>' + esc(candidate.image) + '</strong></div>' +
+      '<div><span>' + esc(tr('image')) + '</span><strong>' + esc(candidate.image) + '</strong></div>' +
       '<div><span>' + esc(tr('compose')) + '</span><strong>' + esc(candidate.compose_project || '-') + '</strong><code>' + esc(candidate.compose_service || '-') + '</code></div>' +
       '<button type="button" ' + (candidate.already_configured ? 'disabled' : '') + ' onclick="importCandidate(\'' + esc(candidate.id) + '\')"><i data-lucide="' + (candidate.already_configured ? 'check' : 'download') + '" aria-hidden="true"></i><span>' + (candidate.already_configured ? esc(tr('imported')) : esc(tr('import'))) + '</span></button>' +
     '</div>'

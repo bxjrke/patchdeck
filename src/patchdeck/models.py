@@ -50,7 +50,7 @@ class DockerImportCandidate(BaseModel):
 class Settings(BaseModel):
     schema_version: int = 1
     update_interval_minutes: int = Field(default=60, ge=1, le=10080)
-    language: str = Field(default="de", pattern=r"^(de|en)$")
+    language: str = Field(default="en", pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
     mqtt_enabled: bool = False
     mqtt_host: str = ""
     mqtt_port: int = Field(default=1883, ge=1, le=65535)

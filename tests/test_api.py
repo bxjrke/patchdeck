@@ -53,8 +53,12 @@ def test_html_pages() -> None:
     assert "Docker-Scan Importvorschläge" not in settings_response.text
     assert "Icon path" in settings_response.text
     assert "stores found files locally" in settings_response.text
-    assert "Hinzufügen" in settings_response.text
+    assert "Hinzufügen" not in settings_response.text
     assert "{version}" in settings_response.text
+    assert 'let currentLanguage = \'en\';' in settings_response.text
+    assert "/static/i18n/" in settings_response.text
+    assert "const I18N = {};" in settings_response.text
+    assert "Vorschauversion" not in settings_response.text
     assert "saveButton(\"saveExistingService" not in settings_response.text
     assert "cdn.simpleicons.org" not in settings_response.text
     assert "save-button" in settings_response.text
@@ -66,10 +70,10 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.3.4" in settings_response.text
-    assert '/static/favicon.png?v0.3.4-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.3.4-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.3.4-logo4' in index_response.text
+    assert "Patchdeck 0.3.5" in settings_response.text
+    assert '/static/favicon.png?v0.3.5-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.3.5-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.3.5-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -103,6 +107,23 @@ def test_png_favicons() -> None:
 
         assert response.status_code == 200
         assert "image/png" in response.headers["content-type"]
+
+
+def test_i18n_assets() -> None:
+    en_response = client.get("/static/i18n/en.json")
+    de_response = client.get("/static/i18n/de.json")
+
+    assert en_response.status_code == 200
+    assert de_response.status_code == 200
+    assert "application/json" in en_response.headers["content-type"]
+    assert "application/json" in de_response.headers["content-type"]
+
+    en = en_response.json()
+    de = de_response.json()
+    assert en["settings"] == "Settings"
+    assert de["settings"] == "Einstellungen"
+    assert set(en) == set(de)
+    assert "Hinzufügen" not in client.get("/settings").text
 
 
 def test_service_crud(tmp_path, monkeypatch) -> None:
@@ -219,7 +240,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.3.4-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.3.5-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -1004,6 +1025,21 @@ def test_settings_roundtrip() -> None:
     assert get_response.status_code == 200
     assert get_response.json()["theme"] == "dark"
     assert get_response.json()["language"] == "en"
+
+
+def test_settings_accepts_documented_language_codes() -> None:
+    payload = {
+        "update_interval_minutes": 30,
+        "language": "fr",
+        "mqtt_enabled": False,
+        "mqtt_discovery_prefix": "homeassistant",
+        "mqtt_base_topic": "patchdeck",
+        "theme": "system",
+    }
+
+    put_response = client.put("/api/settings", json=payload)
+    assert put_response.status_code == 200
+    assert client.get("/api/settings").json()["language"] == "fr"
 
 
 def test_container_workflow_overrides_branch_version_label() -> None:

@@ -20,7 +20,7 @@ Create a Compose file:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.3.4
+    image: ghcr.io/bxjrke/patchdeck:0.3.5
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -57,6 +57,17 @@ See the [Docker deployment guide](docs/DOCKER.md) for volume details, MQTT setup
 - Optional release-note URLs and version-based URL templates.
 - English UI with German translation.
 - Multi-architecture images for `linux/amd64` and `linux/arm64`.
+
+## Translations
+
+Patchdeck's default UI copy is English. Translations live in standalone JSON files under `src/patchdeck/static/i18n/`, with one file per language code, for example `en.json` and `de.json`.
+
+To add a language by pull request:
+
+1. Copy `src/patchdeck/static/i18n/en.json` to a new file named with a simple language code such as `fr.json` or `pt-BR.json`.
+2. Translate every value, keep every key unchanged, and make sure the new file has the same key set as `en.json`.
+3. Add an option for the language in the settings page language selector in `src/patchdeck/main.py`.
+4. Run the test suite before opening the pull request.
 
 ## Self-Updates
 

@@ -38,8 +38,6 @@ Ready or mostly ready:
 
 Still worth doing before `1.0`:
 
-- Move UI translations out of inline JavaScript into standalone files.
-- Add documented language contribution flow.
 - Improve registry/version handling for more image naming schemes.
 - Add UI feedback for autosave success/failure.
 
