@@ -92,17 +92,26 @@ def get_status(refresh: bool = False) -> list[ServiceStatus]:
     return engine.statuses(force_registry_refresh=refresh)
 
 
-@app.post("/api/services/{service_id}/update")
-def update_service(service_id: str) -> dict[str, bool | str]:
+@app.post("/api/services/{service_id}/update", status_code=status.HTTP_202_ACCEPTED)
+def update_service(service_id: str) -> dict[str, object]:
     service = store.get_service(service_id)
     if not service:
         raise HTTPException(status_code=404, detail="service not found")
     if not service_update_enabled(service):
         raise HTTPException(status_code=403, detail="service is not enabled for updates")
-    ok, message = engine.perform_update(service, "web")
-    if not ok:
-        raise HTTPException(status_code=409, detail=message)
-    return {"ok": True, "message": message}
+    job, added = engine.enqueue_update(service, "web")
+    return {"ok": True, "queued": added, "job": job}
+
+
+@app.post("/api/updates", status_code=status.HTTP_202_ACCEPTED)
+def update_all_services() -> dict[str, object]:
+    jobs = engine.enqueue_all_updates("web")
+    return {"ok": True, "queued": len(jobs), "jobs": jobs}
+
+
+@app.get("/api/update-queue")
+def get_update_queue() -> dict[str, object]:
+    return engine.queue_snapshot()
 
 
 @app.post("/api/services/{service_id}/refresh")
@@ -244,6 +253,7 @@ def page_html(active: str) -> str:
       </div>
       <div class="summary" aria-label="Service overview actions" data-i18n-aria-label="serviceOverviewActions">
         <span id="summary-services" class="summary-pill">0 services</span>
+        <button type="button" id="update-all" class="badge badge-action update summary-action" onclick="runAllUpdates()"><i data-lucide="list-restart" aria-hidden="true"></i><span data-i18n="updateAll">Install all updates</span></button>
         <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" onclick="refreshAllServices()" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
     </header>
@@ -599,8 +609,27 @@ async function loadHome() {
   const response = await api('/api/status');
   const statuses = await response.json();
   document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
+  updateAllButton(statuses);
   renderServiceCards(statuses);
   refreshIcons();
+}
+
+function updateAllButton(statuses) {
+  const button = document.querySelector('#update-all');
+  if (!button) return;
+  const count = statuses.filter(service => service.update_available && service.update_enabled).length;
+  button.disabled = count === 0;
+  button.querySelector('span').textContent = count ? tr('updateAll') + ' (' + count + ')' : tr('noUpdates');
+}
+
+async function runAllUpdates() {
+  const button = document.querySelector('#update-all');
+  if (button) button.disabled = true;
+  try {
+    await api('/api/updates', {method: 'POST', body: '{}'});
+  } finally {
+    await loadHome();
+  }
 }
 
 function renderServiceCards(statuses) {

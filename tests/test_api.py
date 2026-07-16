@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -70,10 +72,10 @@ def test_html_pages() -> None:
     assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.3.5" in settings_response.text
-    assert '/static/favicon.png?v0.3.5-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.3.5-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.3.5-logo4' in index_response.text
+    assert "Patchdeck 0.4.0" in settings_response.text
+    assert '/static/favicon.png?v0.4.0-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.4.0-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.4.0-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -240,7 +242,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.3.5-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.4.0-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -256,6 +258,51 @@ def test_patchdeck_service_cannot_be_deleted(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 403
     assert test_store.get_service("patchdeck") is not None
+
+
+def test_update_queue_runs_services_strictly_in_order(tmp_path, monkeypatch) -> None:
+    store = JsonStore(tmp_path)
+    engine = UpdateEngine(store)
+    first = ServiceConfig(id="first-service", name="First", update_enabled=True)
+    second = ServiceConfig(id="second-service", name="Second", update_enabled=True)
+    store.upsert_service(first)
+    store.upsert_service(second)
+    calls: list[str] = []
+    done = threading.Event()
+
+    def fake_perform(service: ServiceConfig, source: str) -> tuple[bool, str]:
+        calls.append(service.id)
+        if len(calls) == 2:
+            done.set()
+        return True, "Update completed."
+
+    monkeypatch.setattr(engine, "perform_update", fake_perform)
+    engine.enqueue_update(first, "test")
+    engine.enqueue_update(second, "test")
+
+    assert done.wait(2)
+    assert calls == ["first-service", "second-service"]
+    queue = engine.queue_snapshot()
+    assert not queue["pending"]
+    assert [job["state"] for job in queue["recent"][-2:]] == ["succeeded", "succeeded"]
+
+
+def test_update_endpoint_queues_instead_of_running_inline(tmp_path, monkeypatch) -> None:
+    store = use_test_store(tmp_path, monkeypatch)
+    service = ServiceConfig(id="queued-service", name="Queued", update_enabled=True)
+    store.upsert_service(service)
+    queued: list[tuple[str, str]] = []
+
+    def fake_enqueue(item: ServiceConfig, source: str):
+        queued.append((item.id, source))
+        return {"id": "job-1", "service_id": item.id, "state": "queued"}, True
+
+    monkeypatch.setattr(main.engine, "enqueue_update", fake_enqueue)
+    response = client.post("/api/services/queued-service/update", json={})
+
+    assert response.status_code == 202
+    assert response.json()["job"]["state"] == "queued"
+    assert queued == [("queued-service", "web")]
 
 
 def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:

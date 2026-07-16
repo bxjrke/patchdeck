@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 from urllib.parse import quote
 from typing import Any
 
@@ -47,12 +48,88 @@ class UpdateEngine:
         self.self_update_state_file = self.state_dir / "self-update-state.json"
         self.release_cache_file = self.state_dir / "release-notes-cache.json"
         self.registry_cache_file = self.state_dir / "registry-cache.json"
+        self.queue_file = self.state_dir / "update-queue.json"
         self._active_updates: dict[str, dict[str, Any]] = {}
         self._active_lock = threading.Lock()
         self._mqtt_started = False
         self._mqtt_start_lock = threading.Lock()
         self._registry_cache_lock = threading.Lock()
         self._force_registry_refresh_lock = threading.Lock()
+        self._queue_lock = threading.Condition(threading.Lock())
+        self._queue_worker_started = False
+        self._queue_jobs = self._load_queue()
+
+    def _load_queue(self) -> list[dict[str, Any]]:
+        payload = load_json(self.queue_file, {})
+        jobs = payload.get("jobs") if isinstance(payload, dict) else None
+        if not isinstance(jobs, list):
+            return []
+        # An interrupted process never leaves a job marked as running forever.
+        for job in jobs:
+            if isinstance(job, dict) and job.get("state") == "running":
+                job.update({"state": "queued", "phase": "Resuming after restart"})
+        return [job for job in jobs if isinstance(job, dict)][-100:]
+
+    def _save_queue_locked(self) -> None:
+        atomic_json(self.queue_file, {"jobs": self._queue_jobs[-100:]})
+
+    def queue_snapshot(self) -> dict[str, Any]:
+        with self._queue_lock:
+            jobs = [dict(job) for job in self._queue_jobs]
+        active = next((job for job in jobs if job.get("state") == "running"), None)
+        pending = [job for job in jobs if job.get("state") == "queued"]
+        return {"active": active, "pending": pending, "recent": [job for job in jobs if job.get("state") in {"succeeded", "failed"}][-20:]}
+
+    def start_queue_worker(self) -> None:
+        with self._queue_lock:
+            if self._queue_worker_started:
+                return
+            self._queue_worker_started = True
+        threading.Thread(target=self._queue_worker, daemon=True, name="patchdeck-update-queue").start()
+
+    def enqueue_update(self, service: ServiceConfig, source: str) -> tuple[dict[str, Any], bool]:
+        self.start_queue_worker()
+        with self._queue_lock:
+            for job in self._queue_jobs:
+                if job.get("service_id") == service.id and job.get("state") in {"queued", "running"}:
+                    return dict(job), False
+            job = {"id": uuid.uuid4().hex, "service_id": service.id, "service_name": service.name, "source": source, "state": "queued", "phase": "Waiting in queue", "created_at": int(time.time())}
+            self._queue_jobs.append(job)
+            self._save_queue_locked()
+            self._queue_lock.notify()
+            self.audit("update_queued", service=service.id, source=source, job_id=job["id"])
+            return dict(job), True
+
+    def enqueue_all_updates(self, source: str) -> list[dict[str, Any]]:
+        statuses = {item.service_id: item for item in self.statuses(force_registry_refresh=True)}
+        services = [service for service in self.store.list_services() if service_update_enabled(service) and statuses.get(service.id) and statuses[service.id].update_available]
+        # A self-update replaces this worker. Always perform it after every other service.
+        services.sort(key=lambda service: service.id == "patchdeck")
+        jobs = []
+        for service in services:
+            job, added = self.enqueue_update(service, source)
+            if added:
+                jobs.append(job)
+        return jobs
+
+    def _queue_worker(self) -> None:
+        while True:
+            with self._queue_lock:
+                job = next((item for item in self._queue_jobs if item.get("state") == "queued"), None)
+                if not job:
+                    self._queue_lock.wait(timeout=30)
+                    continue
+                job.update({"state": "running", "phase": "Preparing update", "started_at": int(time.time())})
+                self._save_queue_locked()
+            service = self.store.get_service(str(job.get("service_id") or ""))
+            if not service or not service_update_enabled(service):
+                ok, message = False, "Service is no longer enabled for updates."
+            else:
+                ok, message = self.perform_update(service, str(job.get("source") or "queue"))
+            with self._queue_lock:
+                job.update({"state": "succeeded" if ok else "failed", "phase": message, "finished_at": int(time.time())})
+                self._save_queue_locked()
+                self._queue_lock.notify_all()
 
     def audit(self, event: str, **fields: object) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -534,6 +611,7 @@ class UpdateEngine:
         return url
 
     def start_background_tasks(self) -> None:
+        self.start_queue_worker()
         with self._mqtt_start_lock:
             if self._mqtt_started:
                 return
@@ -637,8 +715,8 @@ class UpdateEngine:
         if not service or not service_update_enabled(service):
             self.audit("mqtt_command_rejected", service=service_id, reason="not_enabled")
             return
-        threading.Thread(target=self.perform_update, args=(service, "mqtt"), daemon=True).start()
-        self.audit("mqtt_command_accepted", service=service_id)
+        job, added = self.enqueue_update(service, "mqtt")
+        self.audit("mqtt_command_accepted", service=service_id, job_id=job["id"], added=added)
 
 
 def service_container(service: ServiceConfig) -> str:
