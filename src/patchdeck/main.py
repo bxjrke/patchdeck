@@ -253,7 +253,7 @@ def page_html(active: str) -> str:
       </div>
       <div class="summary" aria-label="Service overview actions" data-i18n-aria-label="serviceOverviewActions">
         <span id="summary-services" class="summary-pill">0 services</span>
-        <button type="button" id="update-all" class="badge badge-action update summary-action" onclick="runAllUpdates()"><i data-lucide="list-restart" aria-hidden="true"></i><span data-i18n="updateAll">Install all updates</span></button>
+        <button type="button" id="update-all" class="badge badge-action update summary-action" onclick="runAllUpdates()" hidden><i data-lucide="list-restart" aria-hidden="true"></i><span></span></button>
         <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" onclick="refreshAllServices()" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
     </header>
@@ -618,8 +618,9 @@ function updateAllButton(statuses) {
   const button = document.querySelector('#update-all');
   if (!button) return;
   const count = statuses.filter(service => service.update_available && service.update_enabled).length;
+  button.hidden = count === 0;
   button.disabled = count === 0;
-  button.querySelector('span').textContent = count ? tr('updateAll') + ' (' + count + ')' : tr('noUpdates');
+  if (count) button.querySelector('span').textContent = count + ' ' + tr('updatesInstall');
 }
 
 async function runAllUpdates() {
