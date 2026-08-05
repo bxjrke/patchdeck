@@ -77,10 +77,10 @@ def test_html_pages() -> None:
     assert 'class="footer"' in settings_response.text
     assert 'data-i18n="footer"' not in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.5.1" in settings_response.text
-    assert '/static/favicon.png?v0.5.1-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.5.1-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.5.1-logo4' in index_response.text
+    assert "Patchdeck 0.5.2" in settings_response.text
+    assert '/static/favicon.png?v0.5.2-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.5.2-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.5.2-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -261,7 +261,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.5.1-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.5.2-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -547,6 +547,29 @@ def test_registry_cache_force_refresh_falls_back_to_cached_value(tmp_path, monke
 
     assert label == "0.3.1"
     assert digest == "sha256:current"
+
+
+def test_registry_cache_temporarily_caches_failed_lookup(tmp_path, monkeypatch) -> None:
+    test_store = JsonStore(tmp_path)
+    test_store.update_settings(Settings(update_interval_minutes=5))
+    engine = UpdateEngine(test_store)
+    monkeypatch.setattr(update_engine.time, "time", lambda: 1780659600)
+    calls = []
+
+    def unavailable_registry(image, audit, arch="amd64", os_name="linux"):
+        calls.append(image)
+        return None, None
+
+    monkeypatch.setattr(update_engine, "latest_registry_version", unavailable_registry)
+
+    assert engine.cached_latest_image_info("lscr.io/linuxserver/radarr:latest", "amd64", "linux", "sha256:current") == (None, None)
+    assert engine.cached_latest_image_info("lscr.io/linuxserver/radarr:latest", "amd64", "linux", "sha256:current") == (None, None)
+
+    assert calls == ["lscr.io/linuxserver/radarr:latest"]
+    cache = json.loads(engine.registry_cache_file.read_text(encoding="utf-8"))
+    entry = cache["lscr.io/linuxserver/radarr:latest|linux|amd64"]
+    assert entry["failed_at"] == 1780659600
+    assert entry["failed_local_digest"] == "sha256:current"
 
 
 def test_image_ref_parts_normalizes_explicit_docker_hub_references() -> None:

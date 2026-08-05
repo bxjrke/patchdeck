@@ -20,7 +20,7 @@ Create a Compose file:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.5.1
+    image: ghcr.io/bxjrke/patchdeck:0.5.2
     container_name: patchdeck
     restart: unless-stopped
     ports:

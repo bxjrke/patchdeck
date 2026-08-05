@@ -576,11 +576,27 @@ class UpdateEngine:
             refreshed_at = int(cached.get("refreshed_at") or 0) if isinstance(cached, dict) else 0
         except (TypeError, ValueError):
             refreshed_at = 0
+        try:
+            failed_at = int(cached.get("failed_at") or 0) if isinstance(cached, dict) else 0
+        except (TypeError, ValueError):
+            failed_at = 0
         cache_ttl_seconds = max(60, settings.update_interval_minutes * 60)
         cache_is_fresh = bool(refreshed_at and int(time.time()) - refreshed_at < cache_ttl_seconds)
+        failure_is_fresh = bool(failed_at and int(time.time()) - failed_at < cache_ttl_seconds)
         cache_matches_local = bool(known_local_digest and cached_digest == known_local_digest)
         cache_mismatches_local = bool(known_local_digest and cached_digest and cached_digest != known_local_digest)
         if isinstance(cached, dict) and cache_is_fresh and not cache_mismatches_local and not force_refresh:
+            return cached.get("label"), cached.get("digest")
+        # A registry outage must not make every dashboard request wait for the
+        # same failed network call. Retry at the normal refresh interval, or
+        # sooner when the local image changed. A manual refresh always retries.
+        failed_local_digest = cached.get("failed_local_digest") if isinstance(cached, dict) else None
+        if (
+            isinstance(cached, dict)
+            and failure_is_fresh
+            and failed_local_digest == known_local_digest
+            and not force_refresh
+        ):
             return cached.get("label"), cached.get("digest")
         if force_refresh:
             self.audit("registry_cache_force_refresh", image=image, arch=arch, os=os_name)
@@ -602,6 +618,19 @@ class UpdateEngine:
             atomic_json(self.registry_cache_file, cache)
             self.audit("registry_cache_refreshed", image=image, arch=arch, os=os_name, label=label, digest=digest)
             return label, digest
+        if not isinstance(cache, dict):
+            cache = {}
+        failure_entry = dict(cached) if isinstance(cached, dict) else {
+            "image": image,
+            "arch": arch,
+            "os": os_name,
+            "label": None,
+            "digest": None,
+        }
+        failure_entry["failed_at"] = int(time.time())
+        failure_entry["failed_local_digest"] = known_local_digest
+        cache[key] = failure_entry
+        atomic_json(self.registry_cache_file, cache)
         self.audit("registry_cache_refresh_failed", image=image, arch=arch, os=os_name)
         if isinstance(cached, dict) and not cache_mismatches_local:
             return cached.get("label"), cached.get("digest")
