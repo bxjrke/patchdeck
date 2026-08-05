@@ -18,6 +18,7 @@ import uuid
 from urllib.parse import quote
 from typing import Any
 
+from .docker_import import docker_get
 from .models import ServiceConfig, ServiceStatus, Settings, UpdatePolicy
 from .store import JsonStore
 
@@ -36,6 +37,26 @@ class UpdateRunResult:
     output: str
     deferred: bool = False
     message: str | None = None
+
+
+@dataclass
+class DockerStatusSnapshot:
+    """Local Docker state collected once for one status request.
+
+    The Docker CLI is convenient for exceptional operations, but starting it
+    four times for every service makes the dashboard needlessly serial. The
+    Engine API already exposes the same local state in two list requests.
+    """
+
+    containers: dict[str, dict[str, Any]]
+    images_by_id: dict[str, dict[str, Any]]
+    images_by_ref: dict[str, dict[str, Any]]
+
+    def container(self, name: str) -> dict[str, Any] | None:
+        return self.containers.get(name) or self.containers.get(name.lstrip("/"))
+
+    def image(self, reference: str) -> dict[str, Any] | None:
+        return self.images_by_ref.get(reference) or self.images_by_id.get(reference)
 
 
 class UpdateEngine:
@@ -144,14 +165,28 @@ class UpdateEngine:
         return self._statuses()
 
     def _statuses(self, force_registry_refresh: bool = False) -> list[ServiceStatus]:
+        snapshot = docker_status_snapshot()
+        last_runs = self.load_last_runs()
         return sort_statuses([
-            self.service_status(service, force_registry_refresh=force_registry_refresh)
+            self.service_status(
+                service,
+                force_registry_refresh=force_registry_refresh,
+                docker_snapshot=snapshot,
+                last_runs=last_runs,
+            )
             for service in self.store.list_services()
             if service.enabled
         ])
 
-    def service_status(self, service: ServiceConfig, force_registry_refresh: bool = False) -> ServiceStatus:
+    def service_status(
+        self,
+        service: ServiceConfig,
+        force_registry_refresh: bool = False,
+        docker_snapshot: DockerStatusSnapshot | None = None,
+        last_runs: dict[str, Any] | None = None,
+    ) -> ServiceStatus:
         service_id = service.id
+        running = self.active_update(service_id)
         mock = service.metadata.get("mock_status") if service.metadata else None
         if isinstance(mock, dict):
             current = mock.get("current_version")
@@ -178,27 +213,35 @@ class UpdateEngine:
             )
 
         image = service_image(service)
-        labels, details = docker_labels_for_container(service_container(service))
+        container = service_container(service)
+        labels, details, container_state = docker_status_from_snapshot(docker_snapshot, container)
+        if details is None:
+            labels, details = docker_labels_for_container(container)
+        if container_state is None:
+            container_state = docker_container_state(container)
         current_label = label_version(labels)
         current_digest = comparable_image_digest(details, image)
         latest_label, latest_digest = (None, None)
         if image:
-            local_latest_labels, local_latest_details = docker_image_details(image)
+            local_latest_labels, local_latest_details = docker_image_from_snapshot(docker_snapshot, image)
+            if local_latest_details is None:
+                local_latest_labels, local_latest_details = docker_image_details(image)
             latest_label = label_version(local_latest_labels)
             latest_digest = comparable_image_digest(local_latest_details, image)
             arch = (details or {}).get("Architecture") or (local_latest_details or {}).get("Architecture") or "amd64"
             os_name = (details or {}).get("Os") or (local_latest_details or {}).get("Os") or "linux"
-            remote_label, remote_digest = self.cached_latest_image_info(
-                image,
-                arch,
-                os_name,
-                latest_digest,
-                force_refresh=force_registry_refresh,
-            )
-            if remote_label:
-                latest_label = remote_label
-            if remote_digest and current_repo_digest(details, image):
-                latest_digest = remote_digest
+            if not running:
+                remote_label, remote_digest = self.cached_latest_image_info(
+                    image,
+                    arch,
+                    os_name,
+                    latest_digest,
+                    force_refresh=force_registry_refresh,
+                )
+                if remote_label:
+                    latest_label = remote_label
+                if remote_digest and current_repo_digest(details, image):
+                    latest_digest = remote_digest
 
         update_available = False
         if current_digest and latest_digest:
@@ -207,16 +250,15 @@ class UpdateEngine:
             update_available = current_label != latest_label
         current_display = current_label or short_digest(current_digest)
         latest_display = latest_version_display(current_label, latest_label, update_available)
-        running = self.active_update(service_id)
         return ServiceStatus(
             service_id=service_id,
             id=service_id,
             name=service.name,
-            container=service_container(service),
+            container=container,
             logo_url=service.logo_url or service.metadata.get("logo_url"),
             icon_slug=service.icon_slug or service.metadata.get("icon_slug"),
             image=image,
-            state=(running or {}).get("phase") or docker_container_state(service_container(service)),
+            state=(running or {}).get("phase") or container_state,
             current_version=current_display,
             latest_version=latest_display,
             current_digest=current_digest,
@@ -228,7 +270,7 @@ class UpdateEngine:
             update_percentage=(running or {}).get("update_percentage"),
             update_started_at=(running or {}).get("started_at"),
             update_source=(running or {}).get("source"),
-            last_run=self.load_last_runs().get(service_id),
+            last_run=(last_runs if last_runs is not None else self.load_last_runs()).get(service_id),
             checked_at=int(time.time()),
         )
 
@@ -294,33 +336,6 @@ class UpdateEngine:
         self.publish_service_state(service, in_progress=True, update_percentage=90)
         code2, out2 = run_cmd(up, cwd=project_dir, timeout=300)
         return UpdateRunResult(code2, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2)
-
-    def preview_update(self, service: ServiceConfig) -> UpdateRunResult:
-        """Run Docker Compose's non-mutating pull preview for one service."""
-        compose_file = service.compose_file or service.metadata.get("compose_file") or ""
-        project_dir = service.compose_project_dir or service.metadata.get("compose_project_dir") or service.metadata.get("compose_project") or ""
-        compose_service = service.compose_service or service.metadata.get("compose_service") or service.id
-        if not compose_file and project_dir and Path(project_dir).is_dir():
-            for name in ("docker-compose.yml", "compose.yaml", "compose.yml"):
-                candidate = Path(project_dir) / name
-                if candidate.exists():
-                    compose_file = str(candidate)
-                    break
-        if not project_dir and compose_file:
-            try:
-                project_dir = str(Path(split_compose_files(compose_file)[0]).parent)
-            except ValueError:
-                project_dir = ""
-        if not compose_file or not compose_service:
-            return UpdateRunResult(1, "Service is not fully configured for a Compose update.")
-        try:
-            compose_files = split_compose_files(compose_file)
-        except ValueError as exc:
-            return UpdateRunResult(1, str(exc))
-        command = compose_command(compose_files, "pull", "--dry-run", compose_service)
-        code, output = run_cmd(command, cwd=project_dir, timeout=90)
-        self.audit("update_preview", service=service.id, ok=code == 0, exit_code=code)
-        return UpdateRunResult(code, "$ " + " ".join(command) + "\n" + output)
 
     def load_last_runs(self) -> dict[str, Any]:
         return load_json(self.last_run_file, {})
@@ -1070,6 +1085,92 @@ def atomic_json(path: Path, data: Any) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def docker_status_snapshot() -> DockerStatusSnapshot | None:
+    """Collect local Docker state once for one dashboard status request.
+
+    A partial or unavailable Engine API must never make a status request less
+    capable than before, so callers retain the existing per-item CLI fallback.
+    """
+    try:
+        containers = docker_get("/containers/json?all=1")
+        images = docker_get("/images/json?all=1")
+    except Exception:
+        return None
+    if not isinstance(containers, list) or not isinstance(images, list):
+        return None
+
+    containers_by_name: dict[str, dict[str, Any]] = {}
+    for item in containers:
+        if not isinstance(item, dict):
+            continue
+        container_id = item.get("Id")
+        if isinstance(container_id, str) and container_id:
+            containers_by_name[container_id] = item
+        for name in item.get("Names") or []:
+            if isinstance(name, str) and name:
+                containers_by_name[name.lstrip("/")] = item
+
+    images_by_id: dict[str, dict[str, Any]] = {}
+    images_by_ref: dict[str, dict[str, Any]] = {}
+    for item in images:
+        if not isinstance(item, dict):
+            continue
+        image_id = item.get("Id")
+        if isinstance(image_id, str) and image_id:
+            images_by_id[image_id] = item
+            images_by_id[image_id.removeprefix("sha256:")] = item
+        for reference in [*(item.get("RepoTags") or []), *(item.get("RepoDigests") or [])]:
+            if isinstance(reference, str) and reference:
+                images_by_ref[reference] = item
+
+    return DockerStatusSnapshot(containers_by_name, images_by_id, images_by_ref)
+
+
+def snapshot_image_details(item: dict[str, Any] | None, platform: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if not item:
+        return None
+    labels = item.get("Labels")
+    details: dict[str, Any] = {
+        "Id": item.get("Id"),
+        "RepoDigests": item.get("RepoDigests") or [],
+        "Config": {"Labels": labels if isinstance(labels, dict) else {}},
+    }
+    if isinstance(platform, dict):
+        details["Architecture"] = platform.get("architecture")
+        details["Os"] = platform.get("os")
+    return details
+
+
+def docker_status_from_snapshot(
+    snapshot: DockerStatusSnapshot | None,
+    container: str,
+) -> tuple[dict[str, str], dict[str, Any] | None, str | None]:
+    if snapshot is None:
+        return {}, None, None
+    item = snapshot.container(container)
+    if item is None:
+        return {}, None, None
+    image_id = item.get("ImageID") or item.get("Image")
+    image = snapshot.image(str(image_id)) if image_id else None
+    manifest = item.get("ImageManifestDescriptor")
+    platform = manifest.get("platform") if isinstance(manifest, dict) else None
+    details = snapshot_image_details(image, platform if isinstance(platform, dict) else None)
+    labels = (details or {}).get("Config", {}).get("Labels") or {}
+    state = item.get("State")
+    return labels if isinstance(labels, dict) else {}, details, state if isinstance(state, str) and state else None
+
+
+def docker_image_from_snapshot(
+    snapshot: DockerStatusSnapshot | None,
+    image: str,
+) -> tuple[dict[str, str], dict[str, Any] | None]:
+    if snapshot is None:
+        return {}, None
+    details = snapshot_image_details(snapshot.image(image))
+    labels = (details or {}).get("Config", {}).get("Labels") or {}
+    return (labels if isinstance(labels, dict) else {}), details
 
 
 def docker_labels_for_container(container: str) -> tuple[dict[str, str], dict[str, Any] | None]:

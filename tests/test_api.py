@@ -77,10 +77,10 @@ def test_html_pages() -> None:
     assert 'class="footer"' in settings_response.text
     assert 'data-i18n="footer"' not in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.5.0" in settings_response.text
-    assert '/static/favicon.png?v0.5.0-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.5.0-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.5.0-logo4' in index_response.text
+    assert "Patchdeck 0.5.1" in settings_response.text
+    assert '/static/favicon.png?v0.5.1-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.5.1-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.5.1-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -104,9 +104,12 @@ def test_html_pages() -> None:
     assert "previewReleaseNotes('#service-release-notes')" in settings_response.text
     assert "function previewReleaseNotes(selector)" in settings_response.text
     assert "releaseNotesPreviewInvalid" in settings_response.text
-    assert "function previewUpdate(id)" in index_response.text
-    assert "data-preview-output" in index_response.text
-    assert "/preview-update" in index_response.text
+    assert "function waitForUpdateJob(jobId)" in index_response.text
+    assert "function waitForUpdateJobs(jobIds)" in index_response.text
+    assert "/api/update-queue" in index_response.text
+    assert "/preview-update" not in index_response.text
+    assert "function orderHomeServices(statuses, preserveOrder)" in index_response.text
+    assert "await loadHome({preserveOrder: true})" in index_response.text
 
 
 def test_static_icons() -> None:
@@ -258,7 +261,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.5.0-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.5.1-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -319,53 +322,6 @@ def test_update_endpoint_queues_instead_of_running_inline(tmp_path, monkeypatch)
     assert response.status_code == 202
     assert response.json()["job"]["state"] == "queued"
     assert queued == [("queued-service", "web")]
-
-
-def test_preview_update_endpoint_returns_non_mutating_compose_output(tmp_path, monkeypatch) -> None:
-    store = use_test_store(tmp_path, monkeypatch)
-    service = ServiceConfig(id="preview-service", name="Preview")
-    store.upsert_service(service)
-    monkeypatch.setattr(main.engine, "preview_update", lambda item: UpdateRunResult(0, "$ docker compose pull --dry-run preview-service\nWould pull image"))
-
-    response = client.post("/api/services/preview-service/preview-update", json={})
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "output": "$ docker compose pull --dry-run preview-service\nWould pull image",
-    }
-
-
-def test_preview_update_uses_compose_pull_dry_run(tmp_path, monkeypatch) -> None:
-    engine = UpdateEngine(JsonStore(tmp_path))
-    service = ServiceConfig(
-        id="preview-service",
-        name="Preview",
-        compose_file="/srv/stack/compose.yml",
-        compose_project_dir="/srv/stack",
-        compose_service="app",
-    )
-    calls = []
-
-    def fake_run_cmd(args, cwd=None, timeout=45):
-        calls.append((args, cwd, timeout))
-        return 0, "Would pull"
-
-    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
-
-    result = engine.preview_update(service)
-
-    assert result.exit_code == 0
-    assert calls == [([
-        update_engine.DOCKER_BIN,
-        "compose",
-        "-f",
-        "/srv/stack/compose.yml",
-        "pull",
-        "--dry-run",
-        "app",
-    ], "/srv/stack", 90)]
-    assert "Would pull" in result.output
 
 
 def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:
@@ -715,6 +671,141 @@ def test_status_detects_update_when_local_tag_points_to_newer_image(tmp_path, mo
     assert status.current_digest == "sha256:old"
     assert status.latest_digest == "sha256:new"
     assert status.update_available is True
+
+
+def test_statuses_use_one_docker_socket_snapshot_for_all_services(tmp_path, monkeypatch) -> None:
+    store = JsonStore(tmp_path)
+    store.upsert_service(ServiceConfig(id="first", name="First", container="first", image="example/first:latest"))
+    store.upsert_service(ServiceConfig(id="second", name="Second", container="second", image="example/second:latest"))
+    engine = UpdateEngine(store)
+    calls: list[str] = []
+
+    containers = [
+        {
+            "Id": "container-first",
+            "Names": ["/first"],
+            "ImageID": "sha256:first-current",
+            "State": "running",
+            "ImageManifestDescriptor": {"platform": {"architecture": "amd64", "os": "linux"}},
+        },
+        {
+            "Id": "container-second",
+            "Names": ["/second"],
+            "ImageID": "sha256:second-current",
+            "State": "exited",
+            "ImageManifestDescriptor": {"platform": {"architecture": "amd64", "os": "linux"}},
+        },
+    ]
+    images = [
+        {
+            "Id": "sha256:first-current",
+            "RepoDigests": ["example/first@sha256:first-current"],
+            "Labels": {"org.opencontainers.image.version": "1.0.0"},
+        },
+        {
+            "Id": "sha256:first-latest",
+            "RepoTags": ["example/first:latest"],
+            "RepoDigests": ["example/first@sha256:first-latest"],
+            "Labels": {"org.opencontainers.image.version": "1.1.0"},
+        },
+        {
+            "Id": "sha256:second-current",
+            "RepoDigests": ["example/second@sha256:second-current"],
+            "Labels": {"org.opencontainers.image.version": "2.0.0"},
+        },
+        {
+            "Id": "sha256:second-latest",
+            "RepoTags": ["example/second:latest"],
+            "RepoDigests": ["example/second@sha256:second-latest"],
+            "Labels": {"org.opencontainers.image.version": "2.1.0"},
+        },
+    ]
+
+    def fake_docker_get(path: str):
+        calls.append(path)
+        return containers if path == "/containers/json?all=1" else images
+
+    monkeypatch.setattr(update_engine, "docker_get", fake_docker_get)
+    monkeypatch.setattr(update_engine, "run_cmd", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("CLI fallback should not run")))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda *args, **kwargs: (None, None))
+
+    statuses = engine.statuses()
+
+    assert calls == ["/containers/json?all=1", "/images/json?all=1"]
+    assert [(item.service_id, item.state, item.current_version, item.latest_version, item.update_available) for item in statuses] == [
+        ("first", "running", "1.0.0", "1.1.0", True),
+        ("second", "exited", "2.0.0", "2.1.0", True),
+    ]
+
+
+def test_status_snapshot_falls_back_to_cli_when_socket_is_unavailable(tmp_path, monkeypatch) -> None:
+    store = JsonStore(tmp_path)
+    store.upsert_service(ServiceConfig(id="demo", name="Demo", container="demo", image="example/demo:latest"))
+    engine = UpdateEngine(store)
+    current = {
+        "Id": "sha256:current",
+        "RepoDigests": ["example/demo@sha256:current"],
+        "Config": {"Labels": {"org.opencontainers.image.version": "1.0.0"}},
+        "Architecture": "amd64",
+        "Os": "linux",
+    }
+    latest = {
+        "Id": "sha256:latest",
+        "RepoDigests": ["example/demo@sha256:latest"],
+        "Config": {"Labels": {"org.opencontainers.image.version": "1.1.0"}},
+        "Architecture": "amd64",
+        "Os": "linux",
+    }
+
+    monkeypatch.setattr(update_engine, "docker_get", lambda path: (_ for _ in ()).throw(OSError("socket unavailable")))
+
+    def fake_run_cmd(args: list[str], cwd: str | None = None, timeout: int = 45) -> tuple[int, str]:
+        if args == [update_engine.DOCKER_BIN, "inspect", "demo", "--format", "{{.Image}}"]:
+            return 0, "sha256:current"
+        if args == [update_engine.DOCKER_BIN, "image", "inspect", "sha256:current"]:
+            return 0, json.dumps([current])
+        if args == [update_engine.DOCKER_BIN, "image", "inspect", "example/demo:latest"]:
+            return 0, json.dumps([latest])
+        if args == [update_engine.DOCKER_BIN, "inspect", "demo", "--format", "{{.State.Status}}"]:
+            return 0, "running"
+        return 1, "unexpected command"
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda *args, **kwargs: (None, None))
+
+    status = engine.statuses()[0]
+
+    assert status.state == "running"
+    assert status.update_available is True
+
+
+def test_active_update_status_skips_registry_lookup(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    service = ServiceConfig(id="demo", name="Demo", container="demo", image="example/demo:latest")
+    current = {
+        "Id": "sha256:current",
+        "RepoDigests": ["example/demo@sha256:current"],
+        "Config": {"Labels": {"org.opencontainers.image.version": "1.0.0"}},
+        "Architecture": "amd64",
+        "Os": "linux",
+    }
+    latest = {
+        "Id": "sha256:latest",
+        "RepoDigests": ["example/demo@sha256:latest"],
+        "Config": {"Labels": {"org.opencontainers.image.version": "1.1.0"}},
+        "Architecture": "amd64",
+        "Os": "linux",
+    }
+    monkeypatch.setattr(update_engine, "docker_status_from_snapshot", lambda snapshot, container: (current["Config"]["Labels"], current, "running"))
+    monkeypatch.setattr(update_engine, "docker_image_from_snapshot", lambda snapshot, image: (latest["Config"]["Labels"], latest))
+    monkeypatch.setattr(engine, "cached_latest_image_info", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("registry lookup while update is active")))
+    engine.mark_update_active("demo", True, phase="Recreating", update_percentage=90)
+
+    status = engine.service_status(service, docker_snapshot=object())
+
+    assert status.update_in_progress is True
+    assert status.state == "Recreating"
+    assert status.latest_version == "1.1.0"
 
 
 

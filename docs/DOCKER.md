@@ -19,7 +19,7 @@ The image contains:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.5.0
+    image: ghcr.io/bxjrke/patchdeck:0.5.1
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -88,7 +88,7 @@ If the new container fails its health check or the UI does not behave as expecte
 
 The release workflow publishes:
 
-- `ghcr.io/bxjrke/patchdeck:0.5.0` for version tags like `v0.5.0`
+- `ghcr.io/bxjrke/patchdeck:0.5.1` for version tags like `v0.5.1`
 - `ghcr.io/bxjrke/patchdeck:0.3` for the matching minor line
 - `ghcr.io/bxjrke/patchdeck:main` for pushes to `main`
 - `ghcr.io/bxjrke/patchdeck:sha-...` for immutable commit images

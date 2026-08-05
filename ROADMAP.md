@@ -53,5 +53,4 @@ Patchdeck is a Docker-only web UI for manually updating selected containers. It 
 
 - [x] Improve registry/version handling for more image naming schemes.
 - [x] Add UI feedback for autosave success/failure.
-- [x] Add update dry-run/preview with Docker Compose `pull --dry-run`.
 - [ ] Public release hardening and documentation pass.

@@ -103,18 +103,6 @@ def update_service(service_id: str) -> dict[str, object]:
     return {"ok": True, "queued": added, "job": job}
 
 
-@app.post("/api/services/{service_id}/preview-update")
-def preview_service_update(service_id: str) -> dict[str, object]:
-    service = store.get_service(service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="service not found")
-    result = engine.preview_update(service)
-    return {
-        "ok": result.exit_code == 0,
-        "output": result.output[-4000:],
-    }
-
-
 @app.post("/api/updates", status_code=status.HTTP_202_ACCEPTED)
 def update_all_services() -> dict[str, object]:
     jobs = engine.enqueue_all_updates("web")
@@ -477,7 +465,6 @@ details summary { cursor:pointer; font-size:12px; font-weight:800; }
 .link, .version-link { color:var(--link-text); text-decoration:none; font-weight:800; }
 .link:hover, .version-link:hover { color:var(--link-hover-text); text-decoration:underline; }
 .last-run { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:12px; }
-.update-preview { background:var(--field); border:1px solid var(--line); border-radius:8px; color:var(--muted); font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; margin:10px 0 0; max-height:220px; overflow:auto; padding:12px; white-space:pre-wrap; }
 .service-config { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:0; overflow:hidden; }
 details.service-config summary { cursor:pointer; list-style:none; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 details.service-config summary::-webkit-details-marker { display:none; }
@@ -585,7 +572,10 @@ async function refreshAllServices() {
     const statuses = await response.json();
     document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
     if (typeof renderServiceCards === 'function') {
+      homeServiceOrder = statuses.map(service => service.service_id);
+      updateAllButton(statuses);
       renderServiceCards(statuses);
+      refreshIcons();
     }
   } finally {
     if (badge) {
@@ -597,9 +587,9 @@ async function refreshAllServices() {
   }
 }
 
-async function loadLanguagePreference() {
+async function loadLanguagePreference(settings) {
   try {
-    const settings = await (await api('/api/settings')).json();
+    settings = settings || await (await api('/api/settings')).json();
     applyTheme(settings.theme);
     await selectLanguage(settings.language || 'en');
     applyI18n();
@@ -624,14 +614,36 @@ function saveButton(onclick, labelKey = 'save') {
 
 
 HOME_JS = r'''
-async function loadHome() {
-  await loadLanguagePreference();
-  const response = await api('/api/status');
+let homeServiceOrder = [];
+
+async function loadHome({preserveOrder = false} = {}) {
+  const settingsRequest = api('/api/settings');
+  const statusRequest = api('/api/status');
+  let settings = null;
+  try {
+    settings = await (await settingsRequest).json();
+  } catch {
+    // Fall back to English while the status request continues in parallel.
+  }
+  await loadLanguagePreference(settings);
+  const response = await statusRequest;
   const statuses = await response.json();
   document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
   updateAllButton(statuses);
-  renderServiceCards(statuses);
+  renderServiceCards(orderHomeServices(statuses, preserveOrder));
   refreshIcons();
+}
+
+function orderHomeServices(statuses, preserveOrder) {
+  if (!preserveOrder || !homeServiceOrder.length) {
+    homeServiceOrder = statuses.map(service => service.service_id);
+    return statuses;
+  }
+  const byId = new Map(statuses.map(service => [service.service_id, service]));
+  const ordered = homeServiceOrder.map(id => byId.get(id)).filter(Boolean);
+  const newServices = statuses.filter(service => !homeServiceOrder.includes(service.service_id));
+  homeServiceOrder.push(...newServices.map(service => service.service_id));
+  return [...ordered, ...newServices];
 }
 
 function updateAllButton(statuses) {
@@ -647,9 +659,13 @@ async function runAllUpdates() {
   const button = document.querySelector('#update-all');
   if (button) button.disabled = true;
   try {
-    await api('/api/updates', {method: 'POST', body: '{}'});
+    const response = await api('/api/updates', {method: 'POST', body: '{}'});
+    if (!response.ok) throw new Error('Updates could not be queued');
+    const payload = await response.json();
+    await loadHome({preserveOrder: true});
+    await waitForUpdateJobs((payload.jobs || []).map(job => job.id));
   } finally {
-    await loadHome();
+    await loadHome({preserveOrder: true});
   }
 }
 
@@ -684,8 +700,6 @@ function renderServiceCards(statuses) {
         '<div><span>' + esc(tr('available')) + '</span><strong>' + availableVersion + '</strong></div>' +
       '</div>' +
       '<details><summary>' + esc(tr('image')) + '</summary><code>' + esc(service.image || '—') + '</code></details>' +
-      '<div class="actions compact"><button type="button" class="secondary" onclick="previewUpdate(\'' + esc(service.service_id) + '\')"><i data-lucide="list-checks" aria-hidden="true"></i><span>' + esc(tr('previewUpdate')) + '</span></button></div>' +
-      '<pre class="update-preview" data-preview-output="' + esc(service.service_id) + '" hidden></pre>' +
       lastRun +
     '</section>';
   }).join('');
@@ -712,39 +726,34 @@ async function runUpdate(id) {
   }
   if (state) state.textContent = tr('updateStarting');
   try {
-    await api('/api/services/' + encodeURIComponent(id) + '/update', {method: 'POST', body: '{}'});
-    await waitForUpdateSettle(id);
-  } finally {
-    await loadHome();
-  }
-}
-
-async function previewUpdate(id) {
-  const card = document.querySelector('.card[data-service="' + CSS.escape(id) + '"]');
-  const output = card?.querySelector('[data-preview-output="' + CSS.escape(id) + '"]');
-  if (!output) return;
-  output.hidden = false;
-  output.textContent = tr('previewRunning');
-  try {
-    const response = await api('/api/services/' + encodeURIComponent(id) + '/preview-update', {method: 'POST', body: '{}'});
+    const response = await api('/api/services/' + encodeURIComponent(id) + '/update', {method: 'POST', body: '{}'});
+    if (!response.ok) throw new Error('Update could not be queued');
     const payload = await response.json();
-    output.textContent = payload.output || (payload.ok ? tr('previewNoChanges') : tr('previewFailed'));
-  } catch {
-    output.textContent = tr('previewFailed');
+    await waitForUpdateJob(payload.job?.id);
+  } finally {
+    await loadHome({preserveOrder: true});
   }
 }
 
-async function waitForUpdateSettle(id) {
-  const deadline = Date.now() + 120000;
-  while (Date.now() < deadline) {
+async function waitForUpdateJob(jobId) {
+  await waitForUpdateJobs([jobId]);
+}
+
+async function waitForUpdateJobs(jobIds) {
+  const pending = new Set(jobIds.filter(Boolean));
+  if (!pending.size) return;
+  const deadline = Date.now() + 600000;
+  while (pending.size && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 2000));
     try {
-      const response = await api('/api/status');
-      const statuses = await response.json();
-      const service = statuses.find(item => item.service_id === id);
-      if (service && !service.update_in_progress) return;
+      const response = await api('/api/update-queue');
+      if (!response.ok) continue;
+      const queue = await response.json();
+      [queue.active, ...(queue.pending || []), ...(queue.recent || [])].forEach(job => {
+        if (job && pending.has(job.id) && (job.state === 'succeeded' || job.state === 'failed')) pending.delete(job.id);
+      });
     } catch (error) {
-      // Patchdeck may briefly restart itself during self-update.
+      // Patchdeck may briefly restart itself during a self-update.
     }
   }
 }
