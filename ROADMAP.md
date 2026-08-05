@@ -40,7 +40,7 @@ Patchdeck is a Docker-only web UI for manually updating selected containers. It 
 - [x] Built-in Home Assistant release-notes helper.
 - [x] Custom fixed release-notes URLs per service.
 - [x] Custom URL templates with `{version}`, `{version_url}`, `{major}`, `{minor}`, and `{patch}`.
-- [ ] UI preview/test action for release-notes links.
+- [x] UI preview/test action for release-notes links.
 
 ## Internationalization
 
@@ -51,7 +51,7 @@ Patchdeck is a Docker-only web UI for manually updating selected containers. It 
 
 ## Later
 
-- [ ] Improve registry/version handling for more image naming schemes.
-- [ ] Add UI feedback for autosave success/failure.
-- [ ] Add update dry-run/preview if Docker tooling allows it cleanly.
+- [x] Improve registry/version handling for more image naming schemes.
+- [x] Add UI feedback for autosave success/failure.
+- [x] Add update dry-run/preview with Docker Compose `pull --dry-run`.
 - [ ] Public release hardening and documentation pass.

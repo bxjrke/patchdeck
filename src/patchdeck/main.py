@@ -103,6 +103,18 @@ def update_service(service_id: str) -> dict[str, object]:
     return {"ok": True, "queued": added, "job": job}
 
 
+@app.post("/api/services/{service_id}/preview-update")
+def preview_service_update(service_id: str) -> dict[str, object]:
+    service = store.get_service(service_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="service not found")
+    result = engine.preview_update(service)
+    return {
+        "ok": result.exit_code == 0,
+        "output": result.output[-4000:],
+    }
+
+
 @app.post("/api/updates", status_code=status.HTTP_202_ACCEPTED)
 def update_all_services() -> dict[str, object]:
     jobs = engine.enqueue_all_updates("web")
@@ -260,7 +272,7 @@ def page_html(active: str) -> str:
 
     {content}
 
-    <footer class="footer"><span data-i18n="footer">Preview build. Updates run only when triggered for a configured service.</span><span class="version" aria-label="Patchdeck version">Patchdeck {__version__}</span></footer>
+    <footer class="footer"><span class="version" aria-label="Patchdeck version">Patchdeck {__version__}</span></footer>
   </main>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script>{script}
@@ -292,6 +304,7 @@ SETTINGS_VIEW = '''
           <label><span data-i18n="baseUrl">Base URL</span><input id="base-url" placeholder="https://patchdeck.example"></label>
           <label><span data-i18n="language">Language</span><select id="language"><option value="en">English</option><option value="de">German</option></select></label>
         </div>
+        <div id="settings-save-status" class="autosave-status" role="status" aria-live="polite" hidden></div>
       </section>
 
       <section class="card">
@@ -349,7 +362,7 @@ SETTINGS_VIEW = '''
           <label class="toggle-row"><span data-i18n="manualUpdateAction">Show update action</span><input id="service-update-action" type="checkbox" role="switch"></label>
           <label><span data-i18n="container">Container name</span><input id="service-container" placeholder="homeassistant"></label>
           <label class="wide"><span data-i18n="iconPath">Icon path</span><input id="service-logo-url" placeholder="/data/icons/homeassistant.svg or https://example/icon.svg"></label>
-          <label class="wide"><span data-i18n="releaseNotesField">Release notes source</span><input id="service-release-notes" placeholder="homeassistant"><small data-i18n="releaseNotesHelp">Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.</small></label>
+          <label class="wide"><span data-i18n="releaseNotesField">Release notes source</span><input id="service-release-notes" placeholder="homeassistant"><small data-i18n="releaseNotesHelp">Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.</small><button type="button" class="secondary release-notes-preview" onclick="previewReleaseNotes('#service-release-notes')"><i data-lucide="external-link" aria-hidden="true"></i><span data-i18n="previewReleaseNotes">Preview link</span></button></label>
           <div class="field-help wide"><span data-i18n="iconHelpTitle">Icons</span><strong data-i18n="iconHelp">Patchdeck detects icons from container and image automatically and stores found files locally. Set an icon path when you want to override it.</strong></div>
         </div>
         <div class="actions" data-save-action="create-service"></div>
@@ -464,6 +477,7 @@ details summary { cursor:pointer; font-size:12px; font-weight:800; }
 .link, .version-link { color:var(--link-text); text-decoration:none; font-weight:800; }
 .link:hover, .version-link:hover { color:var(--link-hover-text); text-decoration:underline; }
 .last-run { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:12px; }
+.update-preview { background:var(--field); border:1px solid var(--line); border-radius:8px; color:var(--muted); font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; margin:10px 0 0; max-height:220px; overflow:auto; padding:12px; white-space:pre-wrap; }
 .service-config { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:0; overflow:hidden; }
 details.service-config summary { cursor:pointer; list-style:none; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 details.service-config summary::-webkit-details-marker { display:none; }
@@ -474,6 +488,11 @@ details.service-config summary::-webkit-details-marker { display:none; }
 .summary-title { display:flex; flex-direction:column; min-width:0; }
 .summary-title strong { font-size:16px; }
 .details-body { padding:0 12px 12px; }
+.autosave-status { align-items:center; color:var(--muted); display:flex; font-size:12px; font-weight:800; gap:8px; margin-top:10px; min-height:20px; }
+.autosave-status[data-state="saved"] { color:var(--badge-ok-text); }
+.autosave-status[data-state="error"] { color:var(--badge-update-text); }
+.autosave-status button { min-height:30px; padding:6px 10px; }
+.service-save-status { margin:0; }
 .technical-details { margin-top:10px; }
 .technical-details summary { color:var(--muted); }
 .docker-detail-list { display:grid; grid-template-columns:1fr; gap:8px; margin-top:10px; }
@@ -481,6 +500,7 @@ details.service-config summary::-webkit-details-marker { display:none; }
 .footer { color:#718096; margin-top:22px; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .footer span { margin:0; color:inherit; }
 .version { font-weight:800; white-space:nowrap; }
+.release-notes-preview { justify-self:start; margin-top:3px; }
 [hidden] { display:none !important; }
 @media (max-width:760px) {
   .card-head { align-items:flex-start; flex-direction:column; }
@@ -664,6 +684,8 @@ function renderServiceCards(statuses) {
         '<div><span>' + esc(tr('available')) + '</span><strong>' + availableVersion + '</strong></div>' +
       '</div>' +
       '<details><summary>' + esc(tr('image')) + '</summary><code>' + esc(service.image || '—') + '</code></details>' +
+      '<div class="actions compact"><button type="button" class="secondary" onclick="previewUpdate(\'' + esc(service.service_id) + '\')"><i data-lucide="list-checks" aria-hidden="true"></i><span>' + esc(tr('previewUpdate')) + '</span></button></div>' +
+      '<pre class="update-preview" data-preview-output="' + esc(service.service_id) + '" hidden></pre>' +
       lastRun +
     '</section>';
   }).join('');
@@ -697,6 +719,21 @@ async function runUpdate(id) {
   }
 }
 
+async function previewUpdate(id) {
+  const card = document.querySelector('.card[data-service="' + CSS.escape(id) + '"]');
+  const output = card?.querySelector('[data-preview-output="' + CSS.escape(id) + '"]');
+  if (!output) return;
+  output.hidden = false;
+  output.textContent = tr('previewRunning');
+  try {
+    const response = await api('/api/services/' + encodeURIComponent(id) + '/preview-update', {method: 'POST', body: '{}'});
+    const payload = await response.json();
+    output.textContent = payload.output || (payload.ok ? tr('previewNoChanges') : tr('previewFailed'));
+  } catch {
+    output.textContent = tr('previewFailed');
+  }
+}
+
 async function waitForUpdateSettle(id) {
   const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
@@ -717,6 +754,7 @@ async function waitForUpdateSettle(id) {
 SETTINGS_JS = r'''
 let settingsLoaded = false;
 let settingsSaveTimer = null;
+let settingsSaveVersion = 0;
 
 async function loadSettingsPage() {
   await loadSettings();
@@ -784,7 +822,9 @@ function updateMqttVisibility() {
 function saveSettingsSoon(delay = 500) {
   if (!settingsLoaded) return;
   clearTimeout(settingsSaveTimer);
-  settingsSaveTimer = setTimeout(saveSettings, delay);
+  const version = ++settingsSaveVersion;
+  showSaveStatus(document.querySelector('#settings-save-status'), 'saving');
+  settingsSaveTimer = setTimeout(() => saveSettings(version), delay);
 }
 
 function readSettingsPayload() {
@@ -803,8 +843,34 @@ function readSettingsPayload() {
   };
 }
 
-async function saveSettings() {
-  await api('/api/settings', {method: 'PUT', body: JSON.stringify(readSettingsPayload())});
+function showSaveStatus(target, state) {
+  if (!target) return;
+  target.hidden = false;
+  target.dataset.state = state;
+  if (state === 'error') {
+    target.innerHTML = '<span>' + esc(tr('saveFailed')) + '</span><button type="button" class="secondary" onclick="retrySave(this.closest(\'.autosave-status\'))">' + esc(tr('retry')) + '</button>';
+    return;
+  }
+  target.textContent = tr(state === 'saving' ? 'saving' : 'saved');
+}
+
+function retrySave(target) {
+  const id = target?.dataset.serviceSaveStatus;
+  if (id) {
+    saveExistingServiceSoon(id, 0);
+    return;
+  }
+  saveSettingsSoon(0);
+}
+
+async function saveSettings(version = settingsSaveVersion) {
+  try {
+    const response = await api('/api/settings', {method: 'PUT', body: JSON.stringify(readSettingsPayload())});
+    if (!response.ok) throw new Error('Settings save failed');
+    if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'saved');
+  } catch {
+    if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'error');
+  }
 }
 
 async function loadServiceSettings() {
@@ -848,6 +914,7 @@ function serviceDetails(service) {
       '<div class="actions">' +
         '<button type="button" class="secondary" onclick="refreshService(\'' + esc(service.id) + '\')"><i data-lucide="refresh-cw" aria-hidden="true"></i><span>' + esc(tr('refresh')) + '</span></button>' +
       '</div>' +
+      '<div class="autosave-status service-save-status" data-service-save-status="' + esc(service.id) + '" role="status" aria-live="polite" hidden></div>' +
     '</div>' +
   '</section>';
 }
@@ -891,7 +958,26 @@ function readServicePayload(id, prefix, existingId) {
   };
 }
 
+function previewReleaseNotes(selector) {
+  const source = document.querySelector(selector)?.value.trim();
+  if (!source) {
+    window.alert(tr('releaseNotesPreviewMissing'));
+    return;
+  }
+  const url = source === 'homeassistant'
+    ? 'https://www.home-assistant.io/blog/categories/release-notes/'
+    : source.replaceAll('{version_url}', encodeURIComponent('1.2.3')).replaceAll('{version}', '1.2.3').replaceAll('{major}', '1').replaceAll('{minor}', '2').replaceAll('{patch}', '3');
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported protocol');
+    window.open(parsed.href, '_blank', 'noopener,noreferrer');
+  } catch (_error) {
+    window.alert(tr('releaseNotesPreviewInvalid'));
+  }
+}
+
 const serviceSaveTimers = {};
+const serviceSaveVersions = {};
 
 function wireServiceAutosave() {
   document.querySelectorAll('.service-config').forEach(section => {
@@ -905,13 +991,17 @@ function wireServiceAutosave() {
 
 function saveExistingServiceSoon(id, delay = 500) {
   clearTimeout(serviceSaveTimers[id]);
-  serviceSaveTimers[id] = setTimeout(() => saveExistingService(id), delay);
+  const version = (serviceSaveVersions[id] || 0) + 1;
+  serviceSaveVersions[id] = version;
+  showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saving');
+  serviceSaveTimers[id] = setTimeout(() => saveExistingService(id, version), delay);
 }
 
-async function saveExistingService(id) {
-  const payload = readServicePayload(id, '#edit-', id);
-  const response = await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
-  if (response.ok) {
+async function saveExistingService(id, version = serviceSaveVersions[id]) {
+  try {
+    const payload = readServicePayload(id, '#edit-', id);
+    const response = await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
+    if (!response.ok) throw new Error('Service save failed');
     const service = await response.json();
     const section = document.querySelector('.service-config[data-service-config="' + CSS.escape(id) + '"]');
     if (section) {
@@ -921,6 +1011,9 @@ async function saveExistingService(id) {
       section.dataset.composeProjectDir = service.compose_project_dir || '';
       section.dataset.composeService = service.compose_service || '';
     }
+    if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saved');
+  } catch {
+    if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'error');
   }
 }
 

@@ -65,17 +65,22 @@ def test_html_pages() -> None:
     assert "cdn.simpleicons.org" not in settings_response.text
     assert "save-button" in settings_response.text
     assert 'data-save-action="settings"' not in settings_response.text
+    assert 'id="settings-save-status"' in settings_response.text
+    assert 'data-service-save-status=' in settings_response.text
+    assert "function showSaveStatus(target, state)" in settings_response.text
+    assert "function retrySave(target)" in settings_response.text
+    assert "saveExistingService(id, version)" in settings_response.text
     assert 'id="mqtt-state-label"' in settings_response.text
     assert "lucide" in settings_response.text
     assert "Docker Import" in settings_response.text
     assert "The scan is always available manually" in settings_response.text
-    assert "Preview build. Updates run only when triggered for a configured service." in settings_response.text
     assert 'class="footer"' in settings_response.text
+    assert 'data-i18n="footer"' not in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.4.1" in settings_response.text
-    assert '/static/favicon.png?v0.4.1-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.4.1-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.4.1-logo4' in index_response.text
+    assert "Patchdeck 0.5.0" in settings_response.text
+    assert '/static/favicon.png?v0.5.0-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.5.0-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.5.0-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -96,6 +101,12 @@ def test_html_pages() -> None:
     assert 'repullCurrent' not in index_response.text
     assert "service-policy" not in settings_response.text
     assert "Konfigurieren" not in index_response.text
+    assert "previewReleaseNotes('#service-release-notes')" in settings_response.text
+    assert "function previewReleaseNotes(selector)" in settings_response.text
+    assert "releaseNotesPreviewInvalid" in settings_response.text
+    assert "function previewUpdate(id)" in index_response.text
+    assert "data-preview-output" in index_response.text
+    assert "/preview-update" in index_response.text
 
 
 def test_static_icons() -> None:
@@ -247,7 +258,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.4.1-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.5.0-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
@@ -308,6 +319,53 @@ def test_update_endpoint_queues_instead_of_running_inline(tmp_path, monkeypatch)
     assert response.status_code == 202
     assert response.json()["job"]["state"] == "queued"
     assert queued == [("queued-service", "web")]
+
+
+def test_preview_update_endpoint_returns_non_mutating_compose_output(tmp_path, monkeypatch) -> None:
+    store = use_test_store(tmp_path, monkeypatch)
+    service = ServiceConfig(id="preview-service", name="Preview")
+    store.upsert_service(service)
+    monkeypatch.setattr(main.engine, "preview_update", lambda item: UpdateRunResult(0, "$ docker compose pull --dry-run preview-service\nWould pull image"))
+
+    response = client.post("/api/services/preview-service/preview-update", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "output": "$ docker compose pull --dry-run preview-service\nWould pull image",
+    }
+
+
+def test_preview_update_uses_compose_pull_dry_run(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    service = ServiceConfig(
+        id="preview-service",
+        name="Preview",
+        compose_file="/srv/stack/compose.yml",
+        compose_project_dir="/srv/stack",
+        compose_service="app",
+    )
+    calls = []
+
+    def fake_run_cmd(args, cwd=None, timeout=45):
+        calls.append((args, cwd, timeout))
+        return 0, "Would pull"
+
+    monkeypatch.setattr(update_engine, "run_cmd", fake_run_cmd)
+
+    result = engine.preview_update(service)
+
+    assert result.exit_code == 0
+    assert calls == [([
+        update_engine.DOCKER_BIN,
+        "compose",
+        "-f",
+        "/srv/stack/compose.yml",
+        "pull",
+        "--dry-run",
+        "app",
+    ], "/srv/stack", 90)]
+    assert "Would pull" in result.output
 
 
 def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:
@@ -533,6 +591,57 @@ def test_registry_cache_force_refresh_falls_back_to_cached_value(tmp_path, monke
 
     assert label == "0.3.1"
     assert digest == "sha256:current"
+
+
+def test_image_ref_parts_normalizes_explicit_docker_hub_references() -> None:
+    assert update_engine.image_ref_parts("nginx:1.27") == ("registry-1.docker.io", "library/nginx", "1.27")
+    assert update_engine.image_ref_parts("docker.io/nginx:1.27") == ("registry-1.docker.io", "library/nginx", "1.27")
+    assert update_engine.image_ref_parts("index.docker.io/library/nginx:1.27") == ("registry-1.docker.io", "library/nginx", "1.27")
+    assert update_engine.image_ref_parts("ghcr.io/acme/widget:2.0") == ("ghcr.io", "acme/widget", "2.0")
+
+
+def test_registry_does_not_fall_back_to_another_platform_manifest(monkeypatch) -> None:
+    calls = []
+    events = []
+    index = {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "digest": "sha256:arm64",
+            "platform": {"architecture": "arm64", "os": "linux"},
+        }],
+    }
+
+    def fake_registry_json(registry, repo, path, token, audit, accept=None):
+        calls.append(path)
+        if path == "manifests/latest":
+            return index, "sha256:index"
+        raise AssertionError(f"unexpected registry request: {path}")
+
+    monkeypatch.setattr(update_engine, "registry_token", lambda registry, repo, audit: None)
+    monkeypatch.setattr(update_engine, "registry_json", fake_registry_json)
+
+    result = update_engine.latest_registry_version(
+        "ghcr.io/acme/widget:latest",
+        lambda event, **fields: events.append((event, fields)),
+        arch="amd64",
+        os_name="linux",
+    )
+
+    assert result == (None, None)
+    assert calls == ["manifests/latest"]
+    assert events == [("registry_platform_not_found", {
+        "registry": "ghcr.io",
+        "repo": "acme/widget",
+        "tag": "latest",
+        "arch": "amd64",
+        "os": "linux",
+    })]
+
+
+def test_current_repo_digest_ignores_unrelated_repo_digests() -> None:
+    details = {"RepoDigests": ["ghcr.io/acme/other@sha256:other"]}
+
+    assert update_engine.current_repo_digest(details, "ghcr.io/acme/widget:latest") is None
 
 
 def test_status_endpoint_forwards_manual_refresh(monkeypatch) -> None:

@@ -295,6 +295,33 @@ class UpdateEngine:
         code2, out2 = run_cmd(up, cwd=project_dir, timeout=300)
         return UpdateRunResult(code2, "$ " + " ".join(pull) + "\n" + out1 + "\n$ " + " ".join(up) + "\n" + out2)
 
+    def preview_update(self, service: ServiceConfig) -> UpdateRunResult:
+        """Run Docker Compose's non-mutating pull preview for one service."""
+        compose_file = service.compose_file or service.metadata.get("compose_file") or ""
+        project_dir = service.compose_project_dir or service.metadata.get("compose_project_dir") or service.metadata.get("compose_project") or ""
+        compose_service = service.compose_service or service.metadata.get("compose_service") or service.id
+        if not compose_file and project_dir and Path(project_dir).is_dir():
+            for name in ("docker-compose.yml", "compose.yaml", "compose.yml"):
+                candidate = Path(project_dir) / name
+                if candidate.exists():
+                    compose_file = str(candidate)
+                    break
+        if not project_dir and compose_file:
+            try:
+                project_dir = str(Path(split_compose_files(compose_file)[0]).parent)
+            except ValueError:
+                project_dir = ""
+        if not compose_file or not compose_service:
+            return UpdateRunResult(1, "Service is not fully configured for a Compose update.")
+        try:
+            compose_files = split_compose_files(compose_file)
+        except ValueError as exc:
+            return UpdateRunResult(1, str(exc))
+        command = compose_command(compose_files, "pull", "--dry-run", compose_service)
+        code, output = run_cmd(command, cwd=project_dir, timeout=90)
+        self.audit("update_preview", service=service.id, ok=code == 0, exit_code=code)
+        return UpdateRunResult(code, "$ " + " ".join(command) + "\n" + output)
+
     def load_last_runs(self) -> dict[str, Any]:
         return load_json(self.last_run_file, {})
 
@@ -1099,6 +1126,13 @@ def image_ref_parts(image: str) -> tuple[str, str, str]:
     parts = image.split("/", 1)
     if len(parts) == 2 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
         registry, repo = parts[0], parts[1]
+        # Docker accepts several names for Docker Hub, but its v2 API and
+        # token endpoint live at registry-1.docker.io.  Treat explicit Hub
+        # references exactly like their short-name equivalents.
+        if registry in {"docker.io", "index.docker.io", "registry-1.docker.io"}:
+            registry = "registry-1.docker.io"
+            if "/" not in repo:
+                repo = f"library/{repo}"
     else:
         registry = "registry-1.docker.io"
         repo = image if "/" in image else f"library/{image}"
@@ -1148,17 +1182,21 @@ def latest_registry_version(image: str, audit: Any, arch: str = "amd64", os_name
     if "index" in media_type or "manifest.list" in media_type or manifest.get("manifests"):
         digest = None
         for item in manifest.get("manifests") or []:
+            if not isinstance(item, dict):
+                continue
             platform = item.get("platform") or {}
-            if platform.get("architecture") == arch and platform.get("os") == os_name:
+            if isinstance(platform, dict) and platform.get("architecture") == arch and platform.get("os") == os_name:
                 digest = item.get("digest")
                 break
-        if not digest and manifest.get("manifests"):
-            digest = manifest["manifests"][0].get("digest")
         if not digest:
-            return None, top_digest
+            # Never use a different platform's manifest as a fallback. Its
+            # digest can make an amd64 service appear out of date because an
+            # arm64 image changed (and vice versa).
+            audit("registry_platform_not_found", registry=registry, repo=repo, tag=tag, arch=arch, os=os_name)
+            return None, None
         selected, _selected_digest = registry_json(registry, repo, f"manifests/{digest}", token, audit, accept)
         if not isinstance(selected, dict):
-            return None, top_digest
+            return None, None
     config_digest = ((selected or {}).get("config") or {}).get("digest")
     if not config_digest:
         return None, top_digest
@@ -1187,9 +1225,6 @@ def current_repo_digest(details: dict[str, Any] | None, image: str) -> str | Non
         name, digest = item.split("@", 1)
         if name in candidates or name.endswith("/" + repo) or name.endswith("/" + repo.removeprefix("library/")):
             return digest
-    digests = details.get("RepoDigests") or []
-    if digests and "@" in digests[0]:
-        return digests[0].split("@", 1)[1]
     return None
 
 

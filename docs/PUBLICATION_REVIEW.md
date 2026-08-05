@@ -36,10 +36,14 @@ Ready or mostly ready:
 - MIT license exists.
 - Public Docker deployment docs exist.
 
+Completed since this review:
+
+- Registry handling now normalizes Docker Hub aliases, avoids cross-platform manifest fallbacks, and ignores unrelated local repo digests.
+- Autosave reports saving, saved, and retryable error states.
+
 Still worth doing before `1.0`:
 
-- Improve registry/version handling for more image naming schemes.
-- Add UI feedback for autosave success/failure.
+- Run and document a fresh-install, upgrade, and rollback smoke test using the public image.
 
 ## Versioning
 

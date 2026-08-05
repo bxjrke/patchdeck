@@ -20,7 +20,7 @@ Create a Compose file:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.4.1
+    image: ghcr.io/bxjrke/patchdeck:0.5.0
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -55,6 +55,7 @@ See the [Docker deployment guide](docs/DOCKER.md) for volume details, MQTT setup
 - MQTT install commands, installed/latest versions, release-note links, and update progress.
 - Local icon cache with optional per-service icon overrides.
 - Optional release-note URLs and version-based URL templates.
+- Release-note link testing and non-mutating Docker Compose update previews.
 - English UI with German translation.
 - Multi-architecture images for `linux/amd64` and `linux/arm64`.
 

@@ -19,7 +19,7 @@ The image contains:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.4.1
+    image: ghcr.io/bxjrke/patchdeck:0.5.0
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -74,11 +74,21 @@ Recommended deployment:
 - Do not expose it directly to the public internet.
 - Back up the `/data` volume before major upgrades.
 
+## Upgrade and Rollback
+
+Before an upgrade, create a restorable copy of the host directory mounted at `/data` (for example `/opt/docker/patchdeck`). It contains all service configuration, settings, audit history, update state, registry cache, and cached icons.
+
+1. Change the image tag in your Compose file to the desired immutable version.
+2. Run `docker compose pull patchdeck` followed by `docker compose up -d --no-deps patchdeck`.
+3. Confirm `http://SERVER:8000/healthz` returns `{"status":"ok"}` and open the UI to check the configured services.
+
+If the new container fails its health check or the UI does not behave as expected, change the image tag back to the previous immutable version and repeat step 2. Restore the `/data` backup only if the configuration itself needs to be rolled back; retain the failed-state copy until the issue is understood.
+
 ## Image Tags
 
 The release workflow publishes:
 
-- `ghcr.io/bxjrke/patchdeck:0.4.1` for version tags like `v0.4.1`
+- `ghcr.io/bxjrke/patchdeck:0.5.0` for version tags like `v0.5.0`
 - `ghcr.io/bxjrke/patchdeck:0.3` for the matching minor line
 - `ghcr.io/bxjrke/patchdeck:main` for pushes to `main`
 - `ghcr.io/bxjrke/patchdeck:sha-...` for immutable commit images
