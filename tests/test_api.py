@@ -67,7 +67,9 @@ def test_html_pages() -> None:
     assert 'data-save-action="settings"' not in settings_response.text
     assert 'id="settings-save-status"' in settings_response.text
     assert 'data-service-save-status=' in settings_response.text
-    assert "function showSaveStatus(target, state)" in settings_response.text
+    assert "function showSaveStatus(target, state, field = null)" in settings_response.text
+    assert "function showSaveFeedback(field)" in settings_response.text
+    assert "save-success" in settings_response.text
     assert "function retrySave(target)" in settings_response.text
     assert "saveExistingService(id, version)" in settings_response.text
     assert 'id="mqtt-state-label"' in settings_response.text
@@ -77,10 +79,10 @@ def test_html_pages() -> None:
     assert 'class="footer"' in settings_response.text
     assert 'data-i18n="footer"' not in settings_response.text
     assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.5.2" in settings_response.text
-    assert '/static/favicon.png?v0.5.2-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.5.2-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.5.2-logo4' in index_response.text
+    assert "Patchdeck 0.5.3" in settings_response.text
+    assert '/static/favicon.png?v0.5.3-logo4' in index_response.text
+    assert '/static/favicon.svg?v0.5.3-logo4' in index_response.text
+    assert '/static/apple-touch-icon.png?v0.5.3-logo4' in index_response.text
     assert '<img class="brand-logo"' not in index_response.text
     assert 'data-i18n="settings">Settings</span>' in index_response.text
     assert 'id="summary-state"' not in index_response.text
@@ -143,6 +145,8 @@ def test_i18n_assets() -> None:
     assert de["settings"] == "Einstellungen"
     assert en["updatesInstall"] == "updates to install"
     assert de["updatesInstall"] == "Updates installieren"
+    assert en["changesSaved"] == "Changes saved."
+    assert de["changesSaved"] == "Änderungen gespeichert."
     assert set(en) == set(de)
     assert "Hinzufügen" not in client.get("/settings").text
 
@@ -261,7 +265,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.5.2-logo4"
+    assert service.logo_url == "/static/patchdeck.svg?v0.5.3-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"

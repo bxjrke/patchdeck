@@ -60,6 +60,7 @@
   "releaseNotesPreviewMissing": "Enter a release-notes source first.",
   "previewReleaseNotes": "Preview link",
   "save": "Save",
+  "changesSaved": "Changes saved.",
   "saveFailed": "Could not save changes.",
   "saveService": "Save service",
   "saveSettings": "Save",

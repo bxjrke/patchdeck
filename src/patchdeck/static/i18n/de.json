@@ -60,6 +60,7 @@
   "releaseNotesPreviewMissing": "Bitte zuerst eine Release-Notes-Quelle eingeben.",
   "previewReleaseNotes": "Link testen",
   "save": "Speichern",
+  "changesSaved": "Änderungen gespeichert.",
   "saveFailed": "Änderungen konnten nicht gespeichert werden.",
   "saveService": "Dienst speichern",
   "saveSettings": "Speichern",

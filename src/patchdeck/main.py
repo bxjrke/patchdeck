@@ -440,7 +440,7 @@ button.danger { background:linear-gradient(135deg,#b42318,#dc2626); box-shadow:0
 button.save-button { min-width:150px; color:#fff; justify-content:center; }
 button.save-button span, button.save-button svg { color:#fff; }
 input, select { width:100%; min-height:38px; border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:var(--bg); color:var(--text); font:inherit; }
-label { display:grid; gap:5px; color:var(--muted); font-size:13px; }
+label { display:grid; gap:5px; color:var(--muted); font-size:13px; position:relative; }
 .settings-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
 .card-head + .details-stack { margin-top:12px; }
 .input-suffix { display:flex; align-items:center; gap:8px; margin:0; }
@@ -476,9 +476,15 @@ details.service-config summary::-webkit-details-marker { display:none; }
 .summary-title strong { font-size:16px; }
 .details-body { padding:0 12px 12px; }
 .autosave-status { align-items:center; color:var(--muted); display:flex; font-size:12px; font-weight:800; gap:8px; margin-top:10px; min-height:20px; }
-.autosave-status[data-state="saved"] { color:var(--badge-ok-text); }
+.autosave-status[data-state="saved"] { height:1px; margin:0; min-height:1px; overflow:hidden; }
 .autosave-status[data-state="error"] { color:var(--badge-update-text); }
 .autosave-status button { min-height:30px; padding:6px 10px; }
+.sr-only { clip:rect(0 0 0 0); clip-path:inset(50%); height:1px; overflow:hidden; position:absolute; white-space:nowrap; width:1px; }
+.save-success::after { align-items:center; animation:save-check-in 1.9s ease both; background:#16a34a; border:2px solid var(--card); border-radius:999px; color:#fff; content:"✓"; display:flex; font-size:11px; font-weight:900; height:20px; justify-content:center; line-height:1; pointer-events:none; position:absolute; right:-7px; top:18px; width:20px; z-index:1; }
+.save-success input, .save-success select { animation:save-field-pulse 1.9s ease both; border-color:#22c55e; }
+@keyframes save-field-pulse { 0% { box-shadow:0 0 0 0 #22c55e00; } 18% { box-shadow:0 0 0 4px #22c55e55; } 55% { box-shadow:0 0 0 2px #22c55e22; } 100% { box-shadow:0 0 0 0 #22c55e00; } }
+@keyframes save-check-in { 0% { opacity:0; transform:scale(.65); } 12% { opacity:1; transform:scale(1.08); } 22% { transform:scale(1); } 72% { opacity:1; } 100% { opacity:0; transform:scale(.85); } }
+@media (prefers-reduced-motion:reduce) { .save-success::after, .save-success input, .save-success select { animation:none; } }
 .service-save-status { margin:0; }
 .technical-details { margin-top:10px; }
 .technical-details summary { color:var(--muted); }
@@ -764,6 +770,7 @@ SETTINGS_JS = r'''
 let settingsLoaded = false;
 let settingsSaveTimer = null;
 let settingsSaveVersion = 0;
+let settingsSaveField = null;
 
 async function loadSettingsPage() {
   await loadSettings();
@@ -806,19 +813,19 @@ function wireAutosaveSettings() {
     updateMqttVisibility();
     renderSaveButtons();
     loadServiceSettings();
-    saveSettingsSoon(0);
+    saveSettingsSoon(0, event.target);
   });
   document.querySelector('#theme').addEventListener('change', event => {
     applyTheme(event.target.value);
-    saveSettingsSoon(0);
+    saveSettingsSoon(0, event.target);
   });
-  document.querySelector('#mqtt-enabled').addEventListener('change', () => {
+  document.querySelector('#mqtt-enabled').addEventListener('change', event => {
     updateMqttVisibility();
-    saveSettingsSoon(0);
+    saveSettingsSoon(0, event.target);
   });
   document.querySelectorAll('#update-interval, #base-url, #mqtt-host, #mqtt-port, #mqtt-user, #mqtt-password, #mqtt-prefix, #mqtt-topic').forEach(node => {
-    node.addEventListener('input', () => saveSettingsSoon());
-    node.addEventListener('change', () => saveSettingsSoon(0));
+    node.addEventListener('input', event => saveSettingsSoon(500, event.target));
+    node.addEventListener('change', event => saveSettingsSoon(0, event.target));
   });
 }
 
@@ -828,9 +835,10 @@ function updateMqttVisibility() {
   document.querySelector('#mqtt-state-label').textContent = enabled ? tr('active') : tr('inactive');
 }
 
-function saveSettingsSoon(delay = 500) {
+function saveSettingsSoon(delay = 500, field = null) {
   if (!settingsLoaded) return;
   clearTimeout(settingsSaveTimer);
+  settingsSaveField = field || settingsSaveField;
   const version = ++settingsSaveVersion;
   showSaveStatus(document.querySelector('#settings-save-status'), 'saving');
   settingsSaveTimer = setTimeout(() => saveSettings(version), delay);
@@ -852,15 +860,32 @@ function readSettingsPayload() {
   };
 }
 
-function showSaveStatus(target, state) {
+function showSaveFeedback(field) {
+  const target = field?.closest('label') || field;
   if (!target) return;
+  clearTimeout(target.saveFeedbackTimer);
+  target.classList.remove('save-success');
+  void target.offsetWidth;
+  target.classList.add('save-success');
+  target.saveFeedbackTimer = setTimeout(() => target.classList.remove('save-success'), 1900);
+}
+
+function showSaveStatus(target, state, field = null) {
+  if (!target) return;
+  clearTimeout(target.saveStatusTimer);
   target.hidden = false;
   target.dataset.state = state;
   if (state === 'error') {
     target.innerHTML = '<span>' + esc(tr('saveFailed')) + '</span><button type="button" class="secondary" onclick="retrySave(this.closest(\'.autosave-status\'))">' + esc(tr('retry')) + '</button>';
     return;
   }
-  target.textContent = tr(state === 'saving' ? 'saving' : 'saved');
+  if (state === 'saved') {
+    target.innerHTML = '<span class="sr-only">' + esc(tr('changesSaved')) + '</span>';
+    showSaveFeedback(field);
+    target.saveStatusTimer = setTimeout(() => { target.hidden = true; }, 1900);
+    return;
+  }
+  target.textContent = tr('saving');
 }
 
 function retrySave(target) {
@@ -876,7 +901,7 @@ async function saveSettings(version = settingsSaveVersion) {
   try {
     const response = await api('/api/settings', {method: 'PUT', body: JSON.stringify(readSettingsPayload())});
     if (!response.ok) throw new Error('Settings save failed');
-    if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'saved');
+    if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'saved', settingsSaveField);
   } catch {
     if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'error');
   }
@@ -987,19 +1012,21 @@ function previewReleaseNotes(selector) {
 
 const serviceSaveTimers = {};
 const serviceSaveVersions = {};
+const serviceSaveFields = {};
 
 function wireServiceAutosave() {
   document.querySelectorAll('.service-config').forEach(section => {
     const id = section.dataset.serviceConfig;
     section.querySelectorAll('input').forEach(node => {
-      node.addEventListener('input', () => saveExistingServiceSoon(id));
-      node.addEventListener('change', () => saveExistingServiceSoon(id, 0));
+      node.addEventListener('input', event => saveExistingServiceSoon(id, 500, event.target));
+      node.addEventListener('change', event => saveExistingServiceSoon(id, 0, event.target));
     });
   });
 }
 
-function saveExistingServiceSoon(id, delay = 500) {
+function saveExistingServiceSoon(id, delay = 500, field = null) {
   clearTimeout(serviceSaveTimers[id]);
+  serviceSaveFields[id] = field || serviceSaveFields[id];
   const version = (serviceSaveVersions[id] || 0) + 1;
   serviceSaveVersions[id] = version;
   showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saving');
@@ -1020,7 +1047,7 @@ async function saveExistingService(id, version = serviceSaveVersions[id]) {
       section.dataset.composeProjectDir = service.compose_project_dir || '';
       section.dataset.composeService = service.compose_service || '';
     }
-    if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saved');
+    if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saved', serviceSaveFields[id]);
   } catch {
     if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'error');
   }
