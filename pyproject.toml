@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69,<82"]
+requires = ["setuptools>=69,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -18,7 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "httpx2>=2,<3",
-  "mypy>=1.15,<2",
+  "mypy>=1.15,<3",
   "pytest>=8,<10",
   "ruff>=0.12,<1",
 ]
