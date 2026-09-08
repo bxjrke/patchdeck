@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from threading import Lock
 import json
 import os
+import tempfile
 from pathlib import Path
+from threading import Lock
 
 from .models import ServiceConfig, Settings
+
+
+class StoreError(RuntimeError):
+    """Base exception for persistent state failures."""
+
+
+class StoreCorruptionError(StoreError):
+    """Raised when persisted state exists but cannot be validated."""
 
 
 class JsonStore:
@@ -26,8 +35,10 @@ class JsonStore:
             return Settings.model_validate_json(self._settings_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return Settings()
-        except Exception:
-            return Settings()
+        except Exception as exc:
+            raise StoreCorruptionError(
+                f"Settings file {self._settings_path} is invalid; refusing to replace it with defaults."
+            ) from exc
 
     def _load_services(self) -> dict[str, ServiceConfig]:
         try:
@@ -36,20 +47,22 @@ class JsonStore:
             return {service.id: service for service in services}
         except FileNotFoundError:
             return {}
-        except Exception:
-            return {}
+        except Exception as exc:
+            raise StoreCorruptionError(
+                f"Services file {self._services_path} is invalid; refusing to replace it with an empty list."
+            ) from exc
 
-    def _save_locked(self) -> None:
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        settings_tmp = self._settings_path.with_suffix(".tmp")
-        services_tmp = self._services_path.with_suffix(".tmp")
-        settings_tmp.write_text(self._settings.model_dump_json(indent=2) + "\n", encoding="utf-8")
-        services_tmp.write_text(
-            json.dumps([service.model_dump(mode="json") for service in self._services.values()], indent=2) + "\n",
-            encoding="utf-8",
+    def _save_settings_locked(self, settings: Settings) -> None:
+        atomic_write_text(
+            self._settings_path,
+            settings.model_dump_json(indent=2) + "\n",
         )
-        settings_tmp.replace(self._settings_path)
-        services_tmp.replace(self._services_path)
+
+    def _save_services_locked(self, services: dict[str, ServiceConfig]) -> None:
+        atomic_write_text(
+            self._services_path,
+            json.dumps([service.model_dump(mode="json") for service in services.values()], indent=2) + "\n",
+        )
 
     def get_settings(self) -> Settings:
         with self._lock:
@@ -57,9 +70,9 @@ class JsonStore:
 
     def update_settings(self, settings: Settings) -> Settings:
         with self._lock:
+            self._save_settings_locked(settings)
             self._settings = settings
-            self._save_locked()
-            return self._settings.model_copy(deep=True)
+            return settings.model_copy(deep=True)
 
     def list_services(self) -> list[ServiceConfig]:
         with self._lock:
@@ -72,16 +85,58 @@ class JsonStore:
 
     def upsert_service(self, service: ServiceConfig) -> ServiceConfig:
         with self._lock:
-            self._services[service.id] = service
-            self._save_locked()
+            services = dict(self._services)
+            services[service.id] = service
+            self._save_services_locked(services)
+            self._services = services
             return service.model_copy(deep=True)
 
     def delete_service(self, service_id: str) -> bool:
         with self._lock:
-            deleted = self._services.pop(service_id, None) is not None
-            if deleted:
-                self._save_locked()
-            return deleted
+            if service_id not in self._services:
+                return False
+            services = dict(self._services)
+            del services[service_id]
+            self._save_services_locked(services)
+            self._services = services
+            return True
+
+
+def atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
+    """Durably replace a text file without sharing a predictable temp name."""
+
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_path.chmod(mode)
+        os.replace(temporary_path, path)
+        path.chmod(mode)
+        _fsync_directory(path.parent)
+    except Exception:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def migrate_service_item(item: dict[str, object]) -> dict[str, object]:

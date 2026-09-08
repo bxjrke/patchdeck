@@ -20,7 +20,7 @@ Create a Compose file:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.5.3
+    image: ghcr.io/bxjrke/patchdeck:0.6.0
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -148,7 +148,22 @@ Recommended deployment:
 - Enable update actions only for services you intend Patchdeck to manage.
 - Back up `/data` before major upgrades.
 
-Patchdeck intentionally does not implement its own user or permission system.
+Patchdeck intentionally does not implement its own user or permission system. The bundled UI sends a custom header on every state-changing API call, and stored MQTT passwords are write-only over HTTP. These are defense-in-depth measures, not authentication.
+
+## Development
+
+Patchdeck supports Python 3.11 and 3.12 and uses [uv](https://docs.astral.sh/uv/) for a reproducible development environment:
+
+```bash
+uv sync --locked --extra dev
+uv run --no-sync pytest -q
+uv run --no-sync ruff check src tests
+uv run --no-sync mypy src/patchdeck
+```
+
+The test bootstrap always redirects `PATCHDECK_DATA_DIR` to a temporary directory. Running the suite therefore cannot modify the checked-out `data/` directory.
+
+Read [the architecture guide](docs/ARCHITECTURE.md) before changing persistence, update execution, or runtime ownership. Dependency changes must update `uv.lock`.
 
 ## Container Images
 
@@ -162,6 +177,7 @@ Use a versioned tag for normal installations. The `main` tag tracks unreleased d
 
 Release and deployment details:
 
+- [Architecture guide](docs/ARCHITECTURE.md)
 - [Docker deployment guide](docs/DOCKER.md)
 - [Release history](https://github.com/bxjrke/patchdeck/releases)
 - [Roadmap](ROADMAP.md)

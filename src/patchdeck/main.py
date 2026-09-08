@@ -1,235 +1,128 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-import os
 
-from fastapi import FastAPI, HTTPException, Response, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .docker_import import list_container_candidates, service_from_container
-from .icon_cache import cache_service_icon
-from .models import DockerImportCandidate, ServiceConfig, ServiceStatus, Settings
-from .store import JsonStore
-from .update_engine import UpdateEngine, mqtt_enabled, service_update_enabled
+from .api import ensure_self_service as ensure_runtime_self_service
+from .api import router as api_router
+from .assets import (
+    PATCHDECK_APPLE_ICON_URL,
+    PATCHDECK_FAVICON_URL,
+    PATCHDECK_SVG_FAVICON_URL,
+    STATIC_ASSET_VERSION,
+)
+from .runtime import AppRuntime
 
-store = JsonStore()
-engine = UpdateEngine(store)
-STATIC_ASSET_VERSION = f"v{__version__}-logo4"
-PATCHDECK_LOGO_URL = f"/static/patchdeck.svg?{STATIC_ASSET_VERSION}"
-PATCHDECK_SVG_FAVICON_URL = f"/static/favicon.svg?{STATIC_ASSET_VERSION}"
-PATCHDECK_FAVICON_URL = f"/static/favicon.png?{STATIC_ASSET_VERSION}"
-PATCHDECK_APPLE_ICON_URL = f"/static/apple-touch-icon.png?{STATIC_ASSET_VERSION}"
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    ensure_self_service()
-    engine.start_background_tasks()
-    yield
+UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+WRITE_REQUEST_HEADER = "X-Patchdeck-Request"
 
 
-app = FastAPI(title="Patchdeck", version=__version__, lifespan=lifespan)
-app.mount("/static", StaticFiles(packages=[("patchdeck", "static")]), name="static")
+def add_security_headers(response: Response, *, no_store: bool = False) -> Response:
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if no_store:
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return page_html("home")
+def create_app(
+    runtime_instance: AppRuntime | None = None,
+    *,
+    start_background_tasks: bool = True,
+) -> FastAPI:
+    runtime_instance = runtime_instance or AppRuntime.create()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        ensure_runtime_self_service(runtime_instance)
+        if start_background_tasks:
+            runtime_instance.engine.start_background_tasks()
+        try:
+            yield
+        finally:
+            runtime_instance.engine.stop_background_tasks()
+
+    application = FastAPI(title="Patchdeck", version=__version__, lifespan=lifespan)
+    application.state.runtime = runtime_instance
+    application.include_router(api_router)
+    application.mount("/static", StaticFiles(packages=[("patchdeck", "static")]), name="static")
+
+    @application.middleware("http")
+    async def security_boundary(request: Request, call_next):
+        is_api_request = request.url.path.startswith("/api/")
+        if (
+            is_api_request
+            and request.method in UNSAFE_HTTP_METHODS
+            and request.headers.get(WRITE_REQUEST_HEADER) != "1"
+        ):
+            return add_security_headers(
+                JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            f"{WRITE_REQUEST_HEADER}: 1 is required for "
+                            "state-changing API requests."
+                        )
+                    },
+                ),
+                no_store=True,
+            )
+        return add_security_headers(await call_next(request), no_store=is_api_request)
+
+    @application.get("/", response_class=HTMLResponse)
+    def index() -> HTMLResponse:
+        return page_response("home")
+
+    @application.get("/settings", response_class=HTMLResponse)
+    def settings_page() -> HTMLResponse:
+        return page_response("settings")
+
+    @application.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return application
 
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page() -> str:
-    return page_html("settings")
+def page_response(active: str) -> HTMLResponse:
+    response = HTMLResponse(page_html(active))
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    return response
 
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.get("/api/settings")
-def get_settings() -> Settings:
-    return store.get_settings()
-
-
-@app.put("/api/settings")
-def put_settings(settings: Settings) -> Settings:
-    previous = engine.effective_settings()
-    updated = store.update_settings(settings)
-    current = engine.effective_settings()
-    if mqtt_enabled(previous) and not mqtt_enabled(current):
-        engine.clear_mqtt_entities(previous)
-    return updated
-
-
-@app.get("/api/services")
-def list_services() -> list[ServiceConfig]:
-    return sort_services(store.list_services())
-
-
-@app.put("/api/services/{service_id}")
-def put_service(service_id: str, service: ServiceConfig) -> ServiceConfig:
-    if service.id != service_id:
-        raise HTTPException(status_code=400, detail="service id mismatch")
-    service = enrich_service_from_docker(service)
-    return persist_service(service)
-
-
-@app.delete("/api/services/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_service(service_id: str) -> Response:
-    if service_id == "patchdeck":
-        raise HTTPException(status_code=403, detail="patchdeck service cannot be deleted")
-    deleted = store.delete_service(service_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="service not found")
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@app.get("/api/status")
-def get_status(refresh: bool = False) -> list[ServiceStatus]:
-    return engine.statuses(force_registry_refresh=refresh)
-
-
-@app.post("/api/services/{service_id}/update", status_code=status.HTTP_202_ACCEPTED)
-def update_service(service_id: str) -> dict[str, object]:
-    service = store.get_service(service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="service not found")
-    if not service_update_enabled(service):
-        raise HTTPException(status_code=403, detail="service is not enabled for updates")
-    job, added = engine.enqueue_update(service, "web")
-    return {"ok": True, "queued": added, "job": job}
-
-
-@app.post("/api/updates", status_code=status.HTTP_202_ACCEPTED)
-def update_all_services() -> dict[str, object]:
-    jobs = engine.enqueue_all_updates("web")
-    return {"ok": True, "queued": len(jobs), "jobs": jobs}
-
-
-@app.get("/api/update-queue")
-def get_update_queue() -> dict[str, object]:
-    return engine.queue_snapshot()
-
-
-@app.post("/api/services/{service_id}/refresh")
-def refresh_service(service_id: str) -> ServiceConfig:
-    service = store.get_service(service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="service not found")
-    if not service.container:
-        raise HTTPException(status_code=400, detail="service has no container configured")
-    try:
-        refreshed = service_from_container(service.container, service)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Docker refresh unavailable: {exc}") from exc
-    return persist_service(refreshed)
-
-
-@app.get("/api/icons/{filename}")
-def get_icon(filename: str) -> FileResponse:
-    if "/" in filename or "\\" in filename:
-        raise HTTPException(status_code=404, detail="icon not found")
-    path = store.data_dir / "icons" / filename
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="icon not found")
-    return FileResponse(path)
-
-
-@app.get("/api/import/docker")
-def get_docker_import_candidates() -> list[DockerImportCandidate]:
-    configured_ids = {service.id for service in store.list_services()}
-    try:
-        return list_container_candidates(configured_ids)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Docker import unavailable: {exc}") from exc
-
-
-@app.post("/api/import/docker/{candidate_id}")
-def import_docker_candidate(candidate_id: str) -> ServiceConfig:
-    configured_ids = {service.id for service in store.list_services()}
-    for candidate in list_container_candidates(configured_ids):
-        if candidate.id == candidate_id:
-            return persist_service(candidate.suggested_service)
-    raise HTTPException(status_code=404, detail="candidate not found")
-
-
-
-def persist_service(service: ServiceConfig) -> ServiceConfig:
-    return store.upsert_service(cache_service_icon(service, store.data_dir))
+runtime = AppRuntime.create()
+store = runtime.store
+engine = runtime.engine
+app = create_app(runtime)
 
 
 def ensure_self_service() -> None:
-    existing = store.get_service("patchdeck")
-    container = (existing.container if existing and existing.container else "") or os.environ.get("PATCHDECK_CONTAINER") or os.environ.get("HOSTNAME") or "patchdeck"
-    base = existing or ServiceConfig(
-        id="patchdeck",
-        name="Patchdeck",
-        enabled=True,
-        update_policy="manual",
-        update_enabled=True,
-        container=container,
-        release_notes="https://github.com/bxjrke/patchdeck/releases",
-    )
-    try:
-        service = service_from_container(container, base)
-    except Exception:
-        if container == "patchdeck":
-            return
-        try:
-            service = service_from_container("patchdeck", base)
-        except Exception:
-            return
-    data = service.model_dump()
-    data.update({
-        "id": "patchdeck",
-        "name": "Patchdeck",
-        "enabled": True,
-        "update_policy": "manual",
-        "update_enabled": True,
-        "logo_url": PATCHDECK_LOGO_URL,
-        "icon_slug": None,
-    })
-    data["release_notes"] = "https://github.com/bxjrke/patchdeck/releases"
-    store.upsert_service(ServiceConfig.model_validate(data))
+    """Backward-compatible helper for callers that use the module runtime."""
 
-
-def enrich_service_from_docker(service: ServiceConfig) -> ServiceConfig:
-    runtime_container = (os.environ.get("PATCHDECK_CONTAINER") or os.environ.get("HOSTNAME")) if service.id == "patchdeck" else None
-    container = runtime_container or service.container
-    if not container:
-        return service
-    try:
-        detected = service_from_container(container, service)
-    except Exception:
-        return service
-    data = service.model_dump()
-    detected_data = detected.model_dump()
-    for key in ("image", "compose_file", "compose_project_dir", "compose_service"):
-        if data.get(key) in (None, "") and detected_data.get(key) not in (None, ""):
-            data[key] = detected_data[key]
-    if detected.icon_slug and data.get("icon_slug") in (None, "", "docker", "linuxserver"):
-        data["icon_slug"] = detected.icon_slug
-    data["container"] = detected.container
-    return ServiceConfig.model_validate(data)
-
-
-def sort_services(services: list[ServiceConfig]) -> list[ServiceConfig]:
-    statuses = {status.service_id: status for status in engine.statuses()}
-    return sorted(services, key=lambda service: not bool(statuses.get(service.id) and statuses[service.id].update_available))
-
-
-def service_update_available(service: ServiceConfig) -> bool:
-    status_item = next((item for item in engine.statuses() if item.service_id == service.id), None)
-    return bool(status_item and status_item.update_available)
+    ensure_runtime_self_service(AppRuntime(store=store, engine=engine))
 
 
 def page_html(active: str) -> str:
-    boot = "loadHome();" if active == "home" else "loadSettingsPage();"
+    if active not in {"home", "settings"}:
+        raise ValueError(f"Unknown page: {active}")
     content = HOME_VIEW if active == "home" else SETTINGS_VIEW
-    script = COMMON_JS + (HOME_JS if active == "home" else SETTINGS_JS)
+    script_name = "home.js" if active == "home" else "settings.js"
     return f'''<!doctype html>
 <html lang="en">
 <head>
@@ -239,7 +132,7 @@ def page_html(active: str) -> str:
   <link rel="icon" type="image/png" sizes="32x32" href="{PATCHDECK_FAVICON_URL}">
   <link rel="icon" type="image/svg+xml" href="{PATCHDECK_SVG_FAVICON_URL}">
   <link rel="apple-touch-icon" sizes="180x180" href="{PATCHDECK_APPLE_ICON_URL}">
-  <style>{CSS}</style>
+  <link rel="stylesheet" href="/static/app.css?{STATIC_ASSET_VERSION}">
 </head>
 <body>
   <main class="shell">
@@ -253,8 +146,8 @@ def page_html(active: str) -> str:
       </div>
       <div class="summary" aria-label="Service overview actions" data-i18n-aria-label="serviceOverviewActions">
         <span id="summary-services" class="summary-pill">0 services</span>
-        <button type="button" id="update-all" class="badge badge-action update summary-action" onclick="runAllUpdates()" hidden><i data-lucide="list-restart" aria-hidden="true"></i><span></span></button>
-        <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" onclick="refreshAllServices()" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
+        <button type="button" id="update-all" class="badge badge-action update summary-action" data-action="run-all-updates" hidden><i data-lucide="list-restart" aria-hidden="true"></i><span></span></button>
+        <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" data-action="refresh-all-services" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
     </header>
 
@@ -262,10 +155,8 @@ def page_html(active: str) -> str:
 
     <footer class="footer"><span class="version" aria-label="Patchdeck version">Patchdeck {__version__}</span></footer>
   </main>
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-  <script>{script}
-  {boot}
-  </script>
+  <script defer src="/static/common.js?{STATIC_ASSET_VERSION}"></script>
+  <script defer src="/static/{script_name}?{STATIC_ASSET_VERSION}"></script>
 </body>
 </html>'''
 
@@ -350,7 +241,7 @@ SETTINGS_VIEW = '''
           <label class="toggle-row"><span data-i18n="manualUpdateAction">Show update action</span><input id="service-update-action" type="checkbox" role="switch"></label>
           <label><span data-i18n="container">Container name</span><input id="service-container" placeholder="homeassistant"></label>
           <label class="wide"><span data-i18n="iconPath">Icon path</span><input id="service-logo-url" placeholder="/data/icons/homeassistant.svg or https://example/icon.svg"></label>
-          <label class="wide"><span data-i18n="releaseNotesField">Release notes source</span><input id="service-release-notes" placeholder="homeassistant"><small data-i18n="releaseNotesHelp">Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.</small><button type="button" class="secondary release-notes-preview" onclick="previewReleaseNotes('#service-release-notes')"><i data-lucide="external-link" aria-hidden="true"></i><span data-i18n="previewReleaseNotes">Preview link</span></button></label>
+          <label class="wide"><span data-i18n="releaseNotesField">Release notes source</span><input id="service-release-notes" placeholder="homeassistant"><small data-i18n="releaseNotesHelp">Optional. Use homeassistant for the built-in Home Assistant lookup, or enter a URL. URLs may include {version}, which is replaced with the detected version.</small><button type="button" class="secondary release-notes-preview" data-action="preview-release-notes" data-selector="#service-release-notes"><i data-lucide="external-link" aria-hidden="true"></i><span data-i18n="previewReleaseNotes">Preview link</span></button></label>
           <div class="field-help wide"><span data-i18n="iconHelpTitle">Icons</span><strong data-i18n="iconHelp">Patchdeck detects icons from container and image automatically and stores found files locally. Set an icon path when you want to override it.</strong></div>
         </div>
         <div class="actions" data-save-action="create-service"></div>
@@ -365,748 +256,8 @@ SETTINGS_VIEW = '''
           <span class="badge ok" data-i18n="readOnly">Read-only</span>
         </div>
         <p data-i18n="dockerImportIntro">The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.</p>
-        <div class="actions compact"><button type="button" onclick="loadDockerCandidates()"><i data-lucide="scan-line" aria-hidden="true"></i><span data-i18n="scanDocker">Scan Docker</span></button></div>
+        <div class="actions compact"><button type="button" data-action="scan-docker"><i data-lucide="scan-line" aria-hidden="true"></i><span data-i18n="scanDocker">Scan Docker</span></button></div>
         <div id="docker-candidates" class="notice import-list" data-i18n="dockerScanStart">Start a Docker scan to import containers.</div>
       </section>
     </section>
-'''
-
-
-CSS = r'''
-:root { color-scheme: dark; --bg:#0f172a; --panel:#111c31; --panel2:#15233b; --field:#0b1222aa; --text:#e5edf7; --muted:#9fb0c8; --line:#263750; --purple:#8b5cf6; --blue:#2563eb; --danger:#b42318; --icon-tile:#0b1222aa; --icon-accent:#7dd3fc; --badge-ok-text:#bbf7d0; --badge-ok-bg:#14532d88; --badge-ok-border:#166534; --badge-warn-text:#fef3c7; --badge-warn-bg:#78350f88; --badge-warn-border:#92400e; --badge-update-text:#ffedd5; --badge-update-bg:#9a341288; --badge-update-border:#c2410c; --link-text:#bfdbfe; --link-hover-text:#dbeafe; }
-html[data-theme="light"] { color-scheme: light; --bg:#f6f8fb; --panel:#ffffff; --panel2:#f2f6fb; --field:#ffffff; --text:#132033; --muted:#5d6d82; --line:#d7e0ec; --purple:#6d3fdc; --blue:#155bd5; --danger:#b42318; --icon-tile:#ffffff; --icon-accent:#155bd5; --badge-ok-text:#14532d; --badge-ok-bg:#dcfce7; --badge-ok-border:#16a34a; --badge-warn-text:#713f12; --badge-warn-bg:#fef3c7; --badge-warn-border:#d97706; --badge-update-text:#7c2d12; --badge-update-bg:#ffedd5; --badge-update-border:#ea580c; --link-text:#155bd5; --link-hover-text:#0f3f9f; }
-html[data-theme="system"] { color-scheme: light dark; }
-@media (prefers-color-scheme: light) {
-  html[data-theme="system"] { --bg:#f6f8fb; --panel:#ffffff; --panel2:#f2f6fb; --field:#ffffff; --text:#132033; --muted:#5d6d82; --line:#d7e0ec; --purple:#6d3fdc; --blue:#155bd5; --danger:#b42318; --icon-tile:#ffffff; --icon-accent:#155bd5; --badge-ok-text:#14532d; --badge-ok-bg:#dcfce7; --badge-ok-border:#16a34a; --badge-warn-text:#713f12; --badge-warn-bg:#fef3c7; --badge-warn-border:#d97706; --badge-update-text:#7c2d12; --badge-update-bg:#ffedd5; --badge-update-border:#ea580c; --link-text:#155bd5; --link-hover-text:#0f3f9f; }
-}
-* { box-sizing:border-box; }
-body { margin:0; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
-.shell { max-width:980px; margin:0 auto; padding:34px 16px 48px; }
-.topbar { margin-bottom:20px; }
-.brand { display:grid; gap:5px; min-width:0; }
-.brand-row { display:flex; align-items:center; justify-content:space-between; gap:14px; min-width:0; }
-.eyebrow { margin:0 0 5px; color:#93c5fd; font-size:12px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
-.title-link { color:inherit; text-decoration:none; display:inline-block; }
-h1 { margin:0; font-size:clamp(34px,5vw,54px); letter-spacing:0; }
-h2 { margin:0; font-size:22px; letter-spacing:0; overflow-wrap:anywhere; }
-p { margin:6px 0 0; color:var(--muted); }
-.settings-link { min-height:42px; padding:9px 12px; display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:999px; color:var(--text); background:var(--field); border:1px solid var(--line); text-decoration:none; box-shadow:0 8px 24px #0002; font-weight:800; font-size:13px; flex:0 0 auto; }
-.settings-link span { margin:0; color:inherit; font-size:13px; }
-.icon-button svg, button svg, .logo svg { width:20px; height:20px; display:block; flex:0 0 auto; }
-.settings-link:hover { filter:brightness(1.12); }
-.summary { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:18px; }
-.summary-pill { min-height:42px; display:inline-flex; align-items:center; justify-content:center; margin:0; padding:9px 13px; border:1px solid var(--line); border-radius:999px; background:var(--field); color:var(--muted); box-shadow:0 8px 24px #0002; font-weight:800; font-size:13px; line-height:1.1; text-align:center; }
-.stack, .details-stack { display:grid; gap:10px; }
-.card { background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line); border-radius:8px; padding:14px; box-shadow:0 12px 34px #0002; margin:10px 0; }
-.compact-card { padding:12px 14px; }
-.compact-card .grid { margin-top:10px; }
-.card-head { display:flex; justify-content:space-between; gap:14px; align-items:center; }
-.identity { display:flex; align-items:center; gap:10px; min-width:0; flex:1 1 auto; }
-.logo { width:38px; height:38px; flex:0 0 38px; border-radius:8px; object-fit:contain; background:var(--field); border:1px solid var(--line); padding:7px; }
-.logo.placeholder { display:grid; place-items:center; color:var(--icon-accent); font-weight:900; font-size:22px; }
-.logo.service-icon { display:grid; place-items:center; background:var(--icon-tile); }
-.service-icon-image { width:100%; height:100%; object-fit:contain; }
-.badge { white-space:nowrap; border-radius:999px; padding:8px 11px; font-weight:800; font-size:12px; border:1px solid var(--line); display:inline-flex; align-items:center; gap:8px; line-height:1.1; }
-.badge span { color:inherit; margin:0; font-size:inherit; }
-.badge.ok { color:var(--badge-ok-text); background:var(--badge-ok-bg); border-color:var(--badge-ok-border); }
-.badge.warn { color:var(--badge-warn-text); background:var(--badge-warn-bg); border-color:var(--badge-warn-border); }
-.badge.update, .badge.progress { color:var(--badge-update-text); background:var(--badge-update-bg); border-color:var(--badge-update-border); }
-.badge.neutral { color:var(--muted); background:var(--field); border-color:var(--line); }
-.badge svg { width:14px; height:14px; display:block; flex:0 0 auto; }
-.badge-action { appearance:none; cursor:pointer; box-shadow:none; min-height:0; }
-.badge-action:hover { filter:brightness(1.06); }
-.badge-action:disabled { cursor:not-allowed; opacity:.75; }
-.summary-action { min-height:42px; padding:9px 13px; box-shadow:0 8px 24px #0002; }
-.summary-action, .summary-action span, .summary-action svg { color:var(--text); }
-.summary-action.neutral { background:color-mix(in srgb,var(--panel2) 72%,var(--field)); border-color:var(--line); }
-.summary-action:hover { background:color-mix(in srgb,var(--panel2) 58%,var(--blue)); filter:none; }
-.spinner { width:12px; height:12px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
-.spin-icon svg { animation:spin .8s linear infinite; }
-@keyframes spin { to { transform:rotate(360deg); } }
-.grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:12px; }
-.grid div, label { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:10px; min-width:0; }
-span { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
-strong { display:block; overflow-wrap:anywhere; }
-code { display:block; margin-top:8px; padding:10px; border-radius:8px; background:var(--field); border:1px solid var(--line); color:var(--text); overflow-wrap:anywhere; }
-.actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; }
-.actions.compact { margin-top:14px; }
-button { appearance:none; border:0; cursor:pointer; border-radius:8px; min-height:40px; padding:10px 14px; color:#fff; background:linear-gradient(135deg,var(--purple),var(--blue)); font-weight:800; box-shadow:0 8px 24px #2563eb33; display:inline-flex; align-items:center; gap:8px; justify-content:center; text-align:center; line-height:1.1; }
-button span { color:#fff; margin:0; font-size:13px; }
-button:hover { filter:brightness(1.08); }
-button:disabled { cursor:not-allowed; opacity:.65; filter:saturate(.6); }
-button.secondary { background:var(--field); border:1px solid var(--line); box-shadow:none; color:var(--text); }
-button.secondary span { color:var(--text); }
-button.danger { background:linear-gradient(135deg,#b42318,#dc2626); box-shadow:0 8px 30px #dc262644; }
-button.save-button { min-width:150px; color:#fff; justify-content:center; }
-button.save-button span, button.save-button svg { color:#fff; }
-input, select { width:100%; min-height:38px; border:1px solid var(--line); border-radius:8px; padding:9px 10px; background:var(--bg); color:var(--text); font:inherit; }
-label { display:grid; gap:5px; color:var(--muted); font-size:13px; position:relative; }
-.settings-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
-.card-head + .details-stack { margin-top:12px; }
-.input-suffix { display:flex; align-items:center; gap:8px; margin:0; }
-.input-suffix input { flex:1 1 auto; min-width:0; }
-.input-suffix span { margin:0; color:var(--muted); font-weight:800; }
-.wide { grid-column:1 / -1; }
-small { color:var(--muted); line-height:1.4; }
-.field-help { display:grid; align-content:start; }
-.toggle-row { display:flex; align-items:center; justify-content:space-between; gap:14px; }
-.inline-toggle { background:var(--field); border:1px solid var(--line); border-radius:999px; padding:8px 10px; flex:0 0 auto; }
-.toggle-row span { margin:0; }
-input[type="checkbox"][role="switch"] { appearance:none; width:46px; min-height:26px; height:26px; flex:0 0 46px; border-radius:999px; padding:2px; background:#111827; border:1px solid #30445f; cursor:pointer; transition:background .15s ease,border-color .15s ease; }
-input[type="checkbox"][role="switch"]::before { content:""; display:block; width:20px; height:20px; border-radius:50%; background:#94a3b8; transition:transform .15s ease,background .15s ease; }
-input[type="checkbox"][role="switch"]:checked { background:#2563eb; border-color:#60a5fa; }
-input[type="checkbox"][role="switch"]:checked::before { transform:translateX(20px); background:#fff; }
-.notice { color:var(--muted); }
-.import-list { margin-top:14px; }
-.candidate { display:grid; grid-template-columns:minmax(170px,1fr) minmax(220px,1.2fr) minmax(130px,.7fr) auto; gap:10px; align-items:center; border-top:1px solid var(--line); padding:12px 0; }
-.candidate:first-child { border-top:0; }
-details { margin-top:10px; color:var(--muted); }
-details summary { cursor:pointer; font-size:12px; font-weight:800; }
-.link, .version-link { color:var(--link-text); text-decoration:none; font-weight:800; }
-.link:hover, .version-link:hover { color:var(--link-hover-text); text-decoration:underline; }
-.last-run { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:12px; }
-.service-config { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:0; overflow:hidden; }
-details.service-config summary { cursor:pointer; list-style:none; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-details.service-config summary::-webkit-details-marker { display:none; }
-.service-summary { padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.service-actions { display:flex; gap:8px; flex:0 0 auto; }
-.icon-only { width:38px; height:38px; padding:0; }
-.service-settings-toggle[aria-expanded="true"] { background:#1d4ed8; }
-.summary-title { display:flex; flex-direction:column; min-width:0; }
-.summary-title strong { font-size:16px; }
-.details-body { padding:0 12px 12px; }
-.autosave-status { align-items:center; color:var(--muted); display:flex; font-size:12px; font-weight:800; gap:8px; margin-top:10px; min-height:20px; }
-.autosave-status[data-state="saved"] { height:1px; margin:0; min-height:1px; overflow:hidden; }
-.autosave-status[data-state="error"] { color:var(--badge-update-text); }
-.autosave-status button { min-height:30px; padding:6px 10px; }
-.sr-only { clip:rect(0 0 0 0); clip-path:inset(50%); height:1px; overflow:hidden; position:absolute; white-space:nowrap; width:1px; }
-.save-success::after { align-items:center; animation:save-check-in 1.9s ease both; background:#16a34a; border:2px solid var(--card); border-radius:999px; color:#fff; content:"✓"; display:flex; font-size:11px; font-weight:900; height:20px; justify-content:center; line-height:1; pointer-events:none; position:absolute; right:-7px; top:18px; width:20px; z-index:1; }
-.save-success input, .save-success select { animation:save-field-pulse 1.9s ease both; border-color:#22c55e; }
-@keyframes save-field-pulse { 0% { box-shadow:0 0 0 0 #22c55e00; } 18% { box-shadow:0 0 0 4px #22c55e55; } 55% { box-shadow:0 0 0 2px #22c55e22; } 100% { box-shadow:0 0 0 0 #22c55e00; } }
-@keyframes save-check-in { 0% { opacity:0; transform:scale(.65); } 12% { opacity:1; transform:scale(1.08); } 22% { transform:scale(1); } 72% { opacity:1; } 100% { opacity:0; transform:scale(.85); } }
-@media (prefers-reduced-motion:reduce) { .save-success::after, .save-success input, .save-success select { animation:none; } }
-.service-save-status { margin:0; }
-.technical-details { margin-top:10px; }
-.technical-details summary { color:var(--muted); }
-.docker-detail-list { display:grid; grid-template-columns:1fr; gap:8px; margin-top:10px; }
-.docker-detail-list div { background:var(--field); border:1px solid var(--line); border-radius:8px; padding:10px; }
-.footer { color:#718096; margin-top:22px; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
-.footer span { margin:0; color:inherit; }
-.version { font-weight:800; white-space:nowrap; }
-.release-notes-preview { justify-self:start; margin-top:3px; }
-[hidden] { display:none !important; }
-@media (max-width:760px) {
-  .card-head { align-items:flex-start; flex-direction:column; }
-  .service-card-head { align-items:center; flex-direction:row; }
-  .identity { gap:10px; }
-  .logo { width:38px; height:38px; flex-basis:38px; }
-  h2 { font-size:20px; }
-  .grid, .settings-grid { grid-template-columns:1fr; }
-  .candidate { grid-template-columns:1fr; }
-}
-'''
-
-
-COMMON_JS = r'''
-const api = (path, options = {}) => fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
-const text = value => String(value ?? '');
-const esc = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-let currentLanguage = 'en';
-const I18N = {};
-
-async function loadTranslations(language) {
-  if (I18N[language]) return;
-  const response = await fetch('/static/i18n/' + encodeURIComponent(language) + '.json');
-  if (!response.ok) throw new Error('Translation file not found: ' + language);
-  I18N[language] = await response.json();
-}
-
-async function selectLanguage(language) {
-  await loadTranslations('en');
-  if (language && language !== 'en') {
-    try {
-      await loadTranslations(language);
-      currentLanguage = language;
-      return;
-    } catch {
-      currentLanguage = 'en';
-      return;
-    }
-  }
-  currentLanguage = 'en';
-}
-
-function tr(key) {
-  return (I18N[currentLanguage] && I18N[currentLanguage][key]) || (I18N.en && I18N.en[key]) || key;
-}
-
-function applyI18n() {
-  document.documentElement.lang = currentLanguage;
-  document.querySelectorAll('[data-i18n]').forEach(node => node.textContent = tr(node.dataset.i18n));
-  document.querySelectorAll('[data-i18n-title]').forEach(node => node.title = tr(node.dataset.i18nTitle));
-  document.querySelectorAll('[data-i18n-aria-label]').forEach(node => node.setAttribute('aria-label', tr(node.dataset.i18nAriaLabel)));
-}
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme || 'system';
-}
-
-function refreshIcons() {
-  if (window.lucide) window.lucide.createIcons();
-}
-
-function serviceCountText(count) {
-  return count + ' ' + (count === 1 ? tr('serviceSingular') : tr('servicePlural'));
-}
-
-async function getServices() {
-  const services = await (await api('/api/services')).json();
-  document.querySelector('#summary-services').textContent = serviceCountText(services.length);
-  return services;
-}
-
-async function refreshAllServices() {
-  const badge = document.querySelector('#refresh-status');
-  if (badge) {
-    badge.disabled = true;
-    badge.classList.add('spin-icon');
-    badge.innerHTML = '<i data-lucide="refresh-cw" aria-hidden="true"></i><span>' + esc(tr('refreshRunning')) + '</span>';
-    refreshIcons();
-  }
-  try {
-    const response = await api('/api/status?refresh=true');
-    const statuses = await response.json();
-    document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
-    if (typeof renderServiceCards === 'function') {
-      homeServiceOrder = statuses.map(service => service.service_id);
-      updateAllButton(statuses);
-      renderServiceCards(statuses);
-      refreshIcons();
-    }
-  } finally {
-    if (badge) {
-      badge.disabled = false;
-      badge.classList.remove('spin-icon');
-      badge.innerHTML = '<i data-lucide="refresh-cw" aria-hidden="true"></i><span>' + esc(tr('refreshUpdates')) + '</span>';
-      refreshIcons();
-    }
-  }
-}
-
-async function loadLanguagePreference(settings) {
-  try {
-    settings = settings || await (await api('/api/settings')).json();
-    applyTheme(settings.theme);
-    await selectLanguage(settings.language || 'en');
-    applyI18n();
-  } catch {
-    await selectLanguage('en');
-    applyI18n();
-  }
-}
-
-function logoHtml(service) {
-  if (service.logo_url) {
-    return '<span class="logo service-icon"><img class="service-icon-image" src="' + esc(service.logo_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></span>';
-  }
-  return '<div class="logo placeholder" aria-hidden="true"><i data-lucide="package"></i></div>';
-}
-
-function saveButton(onclick, labelKey = 'save') {
-  const icon = labelKey === 'add' ? 'plus' : 'save';
-  return '<button type="button" class="save-button" onclick="' + onclick + '"><i data-lucide="' + icon + '" aria-hidden="true"></i><span>' + esc(tr(labelKey)) + '</span></button>';
-}
-'''
-
-
-HOME_JS = r'''
-let homeServiceOrder = [];
-
-async function loadHome({preserveOrder = false} = {}) {
-  const settingsRequest = api('/api/settings');
-  const statusRequest = api('/api/status');
-  let settings = null;
-  try {
-    settings = await (await settingsRequest).json();
-  } catch {
-    // Fall back to English while the status request continues in parallel.
-  }
-  await loadLanguagePreference(settings);
-  const response = await statusRequest;
-  const statuses = await response.json();
-  document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
-  updateAllButton(statuses);
-  renderServiceCards(orderHomeServices(statuses, preserveOrder));
-  refreshIcons();
-}
-
-function orderHomeServices(statuses, preserveOrder) {
-  if (!preserveOrder || !homeServiceOrder.length) {
-    homeServiceOrder = statuses.map(service => service.service_id);
-    return statuses;
-  }
-  const byId = new Map(statuses.map(service => [service.service_id, service]));
-  const ordered = homeServiceOrder.map(id => byId.get(id)).filter(Boolean);
-  const newServices = statuses.filter(service => !homeServiceOrder.includes(service.service_id));
-  homeServiceOrder.push(...newServices.map(service => service.service_id));
-  return [...ordered, ...newServices];
-}
-
-function updateAllButton(statuses) {
-  const button = document.querySelector('#update-all');
-  if (!button) return;
-  const count = statuses.filter(service => service.update_available && service.update_enabled).length;
-  button.hidden = count === 0;
-  button.disabled = count === 0;
-  if (count) button.querySelector('span').textContent = count + ' ' + tr('updatesInstall');
-}
-
-async function runAllUpdates() {
-  const button = document.querySelector('#update-all');
-  if (button) button.disabled = true;
-  try {
-    const response = await api('/api/updates', {method: 'POST', body: '{}'});
-    if (!response.ok) throw new Error('Updates could not be queued');
-    const payload = await response.json();
-    await loadHome({preserveOrder: true});
-    await waitForUpdateJobs((payload.jobs || []).map(job => job.id));
-  } finally {
-    await loadHome({preserveOrder: true});
-  }
-}
-
-function renderServiceCards(statuses) {
-  const target = document.querySelector('#services');
-  if (!statuses.length) {
-    target.innerHTML = '<section class="card"><div class="notice">' + esc(tr('noServices')) + '</div></section>';
-    return;
-  }
-  target.innerHTML = statuses.map(service => {
-    const incomplete = !service.latest_version;
-    const badgeClass = service.update_in_progress ? 'progress' : (incomplete ? 'warn' : (service.update_available ? 'update' : 'ok'));
-    const badgeLabel = service.update_in_progress ? tr('updateRunning') : (service.update_available ? tr('updateAvailable') : (incomplete ? tr('incomplete') : tr('upToDate')));
-    const badgeIcon = service.update_in_progress ? '<span class="spinner" aria-hidden="true"></span>' : '<i data-lucide="' + (service.update_available ? 'download' : (incomplete ? 'circle-alert' : 'check')) + '" aria-hidden="true"></i>';
-    const badgeContent = badgeIcon + '<span>' + esc(badgeLabel) + '</span>';
-    const badge = service.update_available && service.update_enabled && !service.update_in_progress
-      ? '<button type="button" class="badge badge-action ' + badgeClass + '" onclick="runUpdate(\'' + esc(service.service_id) + '\')">' + badgeContent + '</button>'
-      : '<span class="badge ' + badgeClass + '">' + badgeContent + '</span>';
-    const availableVersion = versionHtml(service.latest_version || tr('notChecked'), service.release_notes_url);
-    const lastRun = service.last_run
-      ? '<div class="last-run"><span>' + esc(tr('lastUpdate')) + '</span><strong>' + esc(service.last_run.ok ? tr('success') : tr('error')) + ' · ' + esc(formatTs(service.last_run.ts)) + '</strong></div>'
-      : '';
-    return '<section class="card" data-service="' + esc(service.id) + '">' +
-      '<div class="card-head service-card-head">' +
-        '<div class="identity">' + logoHtml(service) + '<h2>' + esc(service.name) + '</h2></div>' +
-        badge +
-      '</div>' +
-      '<div class="grid">' +
-        '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(service.container) + '</strong></div>' +
-        '<div><span>' + esc(tr('status')) + '</span><strong data-role="container-state">' + esc(service.state) + '</strong></div>' +
-        '<div><span>' + esc(tr('installed')) + '</span><strong>' + esc(service.current_version || tr('notChecked')) + '</strong></div>' +
-        '<div><span>' + esc(tr('available')) + '</span><strong>' + availableVersion + '</strong></div>' +
-      '</div>' +
-      '<details><summary>' + esc(tr('image')) + '</summary><code>' + esc(service.image || '—') + '</code></details>' +
-      lastRun +
-    '</section>';
-  }).join('');
-}
-
-function formatTs(value) {
-  if (!value) return '—';
-  const locale = currentLanguage === 'de' ? 'de-DE' : 'en-US';
-  return new Date(Number(value) * 1000).toLocaleString(locale, {dateStyle: 'short', timeStyle: 'short'});
-}
-
-function versionHtml(value, releaseUrl) {
-  if (!releaseUrl) return esc(value);
-  return '<a class="version-link" href="' + esc(releaseUrl) + '" target="_blank" rel="noreferrer">' + esc(value) + '</a>';
-}
-
-async function runUpdate(id) {
-  const card = document.querySelector('.card[data-service="' + CSS.escape(id) + '"]');
-  const badge = card?.querySelector('.badge-action');
-  const state = card?.querySelector('[data-role="container-state"]');
-  if (badge) {
-    badge.disabled = true;
-    badge.innerHTML = '<span class="spinner" aria-hidden="true"></span><span>' + esc(tr('updateRunning')) + '</span>';
-  }
-  if (state) state.textContent = tr('updateStarting');
-  try {
-    const response = await api('/api/services/' + encodeURIComponent(id) + '/update', {method: 'POST', body: '{}'});
-    if (!response.ok) throw new Error('Update could not be queued');
-    const payload = await response.json();
-    await waitForUpdateJob(payload.job?.id);
-  } finally {
-    await loadHome({preserveOrder: true});
-  }
-}
-
-async function waitForUpdateJob(jobId) {
-  await waitForUpdateJobs([jobId]);
-}
-
-async function waitForUpdateJobs(jobIds) {
-  const pending = new Set(jobIds.filter(Boolean));
-  if (!pending.size) return;
-  const deadline = Date.now() + 600000;
-  while (pending.size && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    try {
-      const response = await api('/api/update-queue');
-      if (!response.ok) continue;
-      const queue = await response.json();
-      [queue.active, ...(queue.pending || []), ...(queue.recent || [])].forEach(job => {
-        if (job && pending.has(job.id) && (job.state === 'succeeded' || job.state === 'failed')) pending.delete(job.id);
-      });
-    } catch (error) {
-      // Patchdeck may briefly restart itself during a self-update.
-    }
-  }
-}
-'''
-
-
-SETTINGS_JS = r'''
-let settingsLoaded = false;
-let settingsSaveTimer = null;
-let settingsSaveVersion = 0;
-let settingsSaveField = null;
-
-async function loadSettingsPage() {
-  await loadSettings();
-  await loadServiceSettings();
-  renderSaveButtons();
-  wireAutosaveSettings();
-  settingsLoaded = true;
-  refreshIcons();
-}
-
-async function loadSettings() {
-  const data = await (await api('/api/settings')).json();
-  applyTheme(data.theme);
-  await selectLanguage(data.language || 'en');
-  applyI18n();
-  await getServices();
-  document.querySelector('#update-interval').value = data.update_interval_minutes;
-  document.querySelector('#language').value = currentLanguage;
-  document.querySelector('#mqtt-enabled').checked = Boolean(data.mqtt_enabled);
-  document.querySelector('#mqtt-host').value = data.mqtt_host || '';
-  document.querySelector('#mqtt-port').value = data.mqtt_port || 1883;
-  document.querySelector('#mqtt-user').value = data.mqtt_user || '';
-  document.querySelector('#mqtt-password').value = data.mqtt_password || '';
-  document.querySelector('#mqtt-prefix').value = data.mqtt_discovery_prefix;
-  document.querySelector('#mqtt-topic').value = data.mqtt_base_topic;
-  document.querySelector('#base-url').value = data.base_url || '';
-  document.querySelector('#theme').value = data.theme;
-  updateMqttVisibility();
-  refreshIcons();
-}
-
-function renderSaveButtons() {
-  document.querySelector('[data-save-action="create-service"]').innerHTML = saveButton('createService()', 'add');
-}
-
-function wireAutosaveSettings() {
-  document.querySelector('#language').addEventListener('change', async event => {
-    await selectLanguage(event.target.value);
-    applyI18n();
-    updateMqttVisibility();
-    renderSaveButtons();
-    loadServiceSettings();
-    saveSettingsSoon(0, event.target);
-  });
-  document.querySelector('#theme').addEventListener('change', event => {
-    applyTheme(event.target.value);
-    saveSettingsSoon(0, event.target);
-  });
-  document.querySelector('#mqtt-enabled').addEventListener('change', event => {
-    updateMqttVisibility();
-    saveSettingsSoon(0, event.target);
-  });
-  document.querySelectorAll('#update-interval, #base-url, #mqtt-host, #mqtt-port, #mqtt-user, #mqtt-password, #mqtt-prefix, #mqtt-topic').forEach(node => {
-    node.addEventListener('input', event => saveSettingsSoon(500, event.target));
-    node.addEventListener('change', event => saveSettingsSoon(0, event.target));
-  });
-}
-
-function updateMqttVisibility() {
-  const enabled = document.querySelector('#mqtt-enabled').checked;
-  document.querySelector('#mqtt-fields').hidden = !enabled;
-  document.querySelector('#mqtt-state-label').textContent = enabled ? tr('active') : tr('inactive');
-}
-
-function saveSettingsSoon(delay = 500, field = null) {
-  if (!settingsLoaded) return;
-  clearTimeout(settingsSaveTimer);
-  settingsSaveField = field || settingsSaveField;
-  const version = ++settingsSaveVersion;
-  showSaveStatus(document.querySelector('#settings-save-status'), 'saving');
-  settingsSaveTimer = setTimeout(() => saveSettings(version), delay);
-}
-
-function readSettingsPayload() {
-  return {
-    update_interval_minutes: Number(document.querySelector('#update-interval').value),
-    language: document.querySelector('#language').value,
-    mqtt_enabled: document.querySelector('#mqtt-enabled').checked,
-    mqtt_host: document.querySelector('#mqtt-host').value.trim(),
-    mqtt_port: Number(document.querySelector('#mqtt-port').value || 1883),
-    mqtt_user: document.querySelector('#mqtt-user').value.trim(),
-    mqtt_password: document.querySelector('#mqtt-password').value,
-    mqtt_discovery_prefix: document.querySelector('#mqtt-prefix').value,
-    mqtt_base_topic: document.querySelector('#mqtt-topic').value,
-    base_url: document.querySelector('#base-url').value.trim(),
-    theme: document.querySelector('#theme').value
-  };
-}
-
-function showSaveFeedback(field) {
-  const target = field?.closest('label') || field;
-  if (!target) return;
-  clearTimeout(target.saveFeedbackTimer);
-  target.classList.remove('save-success');
-  void target.offsetWidth;
-  target.classList.add('save-success');
-  target.saveFeedbackTimer = setTimeout(() => target.classList.remove('save-success'), 1900);
-}
-
-function showSaveStatus(target, state, field = null) {
-  if (!target) return;
-  clearTimeout(target.saveStatusTimer);
-  target.hidden = false;
-  target.dataset.state = state;
-  if (state === 'error') {
-    target.innerHTML = '<span>' + esc(tr('saveFailed')) + '</span><button type="button" class="secondary" onclick="retrySave(this.closest(\'.autosave-status\'))">' + esc(tr('retry')) + '</button>';
-    return;
-  }
-  if (state === 'saved') {
-    target.innerHTML = '<span class="sr-only">' + esc(tr('changesSaved')) + '</span>';
-    showSaveFeedback(field);
-    target.saveStatusTimer = setTimeout(() => { target.hidden = true; }, 1900);
-    return;
-  }
-  target.textContent = tr('saving');
-}
-
-function retrySave(target) {
-  const id = target?.dataset.serviceSaveStatus;
-  if (id) {
-    saveExistingServiceSoon(id, 0);
-    return;
-  }
-  saveSettingsSoon(0);
-}
-
-async function saveSettings(version = settingsSaveVersion) {
-  try {
-    const response = await api('/api/settings', {method: 'PUT', body: JSON.stringify(readSettingsPayload())});
-    if (!response.ok) throw new Error('Settings save failed');
-    if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'saved', settingsSaveField);
-  } catch {
-    if (version === settingsSaveVersion) showSaveStatus(document.querySelector('#settings-save-status'), 'error');
-  }
-}
-
-async function loadServiceSettings() {
-  const services = await getServices();
-  const target = document.querySelector('#service-settings');
-  if (!services.length) {
-    target.textContent = tr('noServices');
-    return;
-  }
-  target.innerHTML = services.map(service => serviceDetails(service)).join('');
-  wireServiceAutosave();
-  refreshIcons();
-}
-
-function serviceDetails(service) {
-  return '<section class="service-config" data-service-config="' + esc(service.id) + '" data-icon-slug="' + esc(service.icon_slug || '') + '" data-image="' + esc(service.image || '') + '" data-compose-file="' + esc(service.compose_file || '') + '" data-compose-project-dir="' + esc(service.compose_project_dir || '') + '" data-compose-service="' + esc(service.compose_service || '') + '">' +
-    '<div class="service-summary">' +
-      '<div class="identity">' + logoHtml(service) + '<span class="summary-title"><strong>' + esc(service.name) + '</strong><span>' + esc(service.id) + '</span></span></div>' +
-      '<div class="service-actions">' +
-        '<button type="button" class="secondary icon-only service-settings-toggle" data-i18n-title="edit" title="' + esc(tr('edit')) + '" aria-expanded="false" onclick="toggleServiceSettings(\'' + esc(service.id) + '\')"><i data-lucide="settings" aria-hidden="true"></i></button>' +
-        '<button type="button" class="danger icon-only" data-i18n-title="delete" title="' + esc(tr('delete')) + '" onclick="deleteService(\'' + esc(service.id) + '\')" ' + (service.id === 'patchdeck' ? 'disabled aria-disabled="true"' : '') + '><i data-lucide="trash-2" aria-hidden="true"></i></button>' +
-      '</div>' +
-    '</div>' +
-    '<div class="details-body" hidden>' +
-      '<div class="grid settings-grid">' +
-        '<label><span>' + esc(tr('name')) + '</span><input id="edit-name-' + esc(service.id) + '" value="' + esc(service.name) + '"></label>' +
-        '<label class="toggle-row"><span>' + esc(tr('updateAllowed')) + '</span><input id="edit-update-action-' + esc(service.id) + '" type="checkbox" role="switch" ' + checked(Boolean(service.update_enabled)) + '></label>' +
-        '<label><span>' + esc(tr('container')) + '</span><input id="edit-container-' + esc(service.id) + '" value="' + esc(service.container || '') + '"></label>' +
-        '<label class="wide"><span>' + esc(tr('iconPath')) + '</span><input id="edit-logo-url-' + esc(service.id) + '" value="' + esc(service.logo_url || '') + '"></label>' +
-        '<label class="wide"><span>' + esc(tr('releaseNotesField')) + '</span><input id="edit-release-notes-' + esc(service.id) + '" value="' + esc(service.release_notes || '') + '"><small>' + esc(tr('releaseNotesHelp')) + '</small></label>' +
-      '</div>' +
-      '<details class="technical-details"><summary>' + esc(tr('technicalDetails')) + '</summary>' +
-        '<div class="docker-detail-list">' +
-          dockerDetail(tr('iconSlug'), service.icon_slug || '-') +
-          dockerDetail(tr('image'), service.image || '-') +
-          dockerDetail(tr('composeFile'), service.compose_file || '-') +
-          dockerDetail(tr('composeProject'), service.compose_project_dir || '-') +
-          dockerDetail(tr('composeService'), service.compose_service || '-') +
-        '</div>' +
-      '</details>' +
-      '<div class="actions">' +
-        '<button type="button" class="secondary" onclick="refreshService(\'' + esc(service.id) + '\')"><i data-lucide="refresh-cw" aria-hidden="true"></i><span>' + esc(tr('refresh')) + '</span></button>' +
-      '</div>' +
-      '<div class="autosave-status service-save-status" data-service-save-status="' + esc(service.id) + '" role="status" aria-live="polite" hidden></div>' +
-    '</div>' +
-  '</section>';
-}
-
-function checked(value) {
-  return value ? 'checked' : '';
-}
-
-function dockerDetail(label, value) {
-  return '<div><span>' + esc(label) + '</span><strong>' + esc(value) + '</strong></div>';
-}
-
-function toggleServiceSettings(id) {
-  const section = document.querySelector('.service-config[data-service-config="' + CSS.escape(id) + '"]');
-  const body = section?.querySelector('.details-body');
-  const button = section?.querySelector('.service-settings-toggle');
-  if (!body || !button) return;
-  const expanded = body.hasAttribute('hidden');
-  body.toggleAttribute('hidden', !expanded);
-  button.setAttribute('aria-expanded', String(expanded));
-}
-
-function readServicePayload(id, prefix, existingId) {
-  const section = existingId ? document.querySelector('.service-config[data-service-config="' + CSS.escape(existingId) + '"]') : null;
-  return {
-    id: existingId || document.querySelector('#service-id').value.trim(),
-    name: document.querySelector(prefix + 'name-' + id).value.trim(),
-    adapter: 'docker',
-    enabled: true,
-    update_policy: document.querySelector(prefix + 'update-action-' + id).checked ? 'manual' : 'disabled',
-    update_enabled: document.querySelector(prefix + 'update-action-' + id).checked,
-    container: document.querySelector(prefix + 'container-' + id).value.trim(),
-    icon_slug: section?.dataset.iconSlug || '',
-    image: section?.dataset.image || '',
-    compose_file: section?.dataset.composeFile || '',
-    compose_project_dir: section?.dataset.composeProjectDir || '',
-    compose_service: section?.dataset.composeService || '',
-    logo_url: document.querySelector(prefix + 'logo-url-' + id)?.value.trim() || '',
-    release_notes: document.querySelector(prefix + 'release-notes-' + id)?.value.trim() || '',
-    metadata: {}
-  };
-}
-
-function previewReleaseNotes(selector) {
-  const source = document.querySelector(selector)?.value.trim();
-  if (!source) {
-    window.alert(tr('releaseNotesPreviewMissing'));
-    return;
-  }
-  const url = source === 'homeassistant'
-    ? 'https://www.home-assistant.io/blog/categories/release-notes/'
-    : source.replaceAll('{version_url}', encodeURIComponent('1.2.3')).replaceAll('{version}', '1.2.3').replaceAll('{major}', '1').replaceAll('{minor}', '2').replaceAll('{patch}', '3');
-  try {
-    const parsed = new URL(url);
-    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported protocol');
-    window.open(parsed.href, '_blank', 'noopener,noreferrer');
-  } catch (_error) {
-    window.alert(tr('releaseNotesPreviewInvalid'));
-  }
-}
-
-const serviceSaveTimers = {};
-const serviceSaveVersions = {};
-const serviceSaveFields = {};
-
-function wireServiceAutosave() {
-  document.querySelectorAll('.service-config').forEach(section => {
-    const id = section.dataset.serviceConfig;
-    section.querySelectorAll('input').forEach(node => {
-      node.addEventListener('input', event => saveExistingServiceSoon(id, 500, event.target));
-      node.addEventListener('change', event => saveExistingServiceSoon(id, 0, event.target));
-    });
-  });
-}
-
-function saveExistingServiceSoon(id, delay = 500, field = null) {
-  clearTimeout(serviceSaveTimers[id]);
-  serviceSaveFields[id] = field || serviceSaveFields[id];
-  const version = (serviceSaveVersions[id] || 0) + 1;
-  serviceSaveVersions[id] = version;
-  showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saving');
-  serviceSaveTimers[id] = setTimeout(() => saveExistingService(id, version), delay);
-}
-
-async function saveExistingService(id, version = serviceSaveVersions[id]) {
-  try {
-    const payload = readServicePayload(id, '#edit-', id);
-    const response = await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
-    if (!response.ok) throw new Error('Service save failed');
-    const service = await response.json();
-    const section = document.querySelector('.service-config[data-service-config="' + CSS.escape(id) + '"]');
-    if (section) {
-      section.dataset.iconSlug = service.icon_slug || '';
-      section.dataset.image = service.image || '';
-      section.dataset.composeFile = service.compose_file || '';
-      section.dataset.composeProjectDir = service.compose_project_dir || '';
-      section.dataset.composeService = service.compose_service || '';
-    }
-    if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saved', serviceSaveFields[id]);
-  } catch {
-    if (version === serviceSaveVersions[id]) showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'error');
-  }
-}
-
-async function createService() {
-  const id = document.querySelector('#service-id').value.trim();
-  const payload = {
-    id,
-    name: document.querySelector('#service-name').value.trim(),
-    adapter: 'docker',
-    enabled: true,
-    update_policy: document.querySelector('#service-update-action').checked ? 'manual' : 'disabled',
-    update_enabled: document.querySelector('#service-update-action').checked,
-    container: document.querySelector('#service-container').value.trim(),
-    release_notes: document.querySelector('#service-release-notes').value.trim(),
-    logo_url: document.querySelector('#service-logo-url').value.trim(),
-    metadata: {}
-  };
-  await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
-  await loadServiceSettings();
-}
-
-async function refreshService(id) {
-  await api('/api/services/' + encodeURIComponent(id) + '/refresh', {method: 'POST', body: '{}'});
-  await loadServiceSettings();
-}
-
-async function deleteService(id) {
-  await api('/api/services/' + encodeURIComponent(id), {method: 'DELETE'});
-  await loadServiceSettings();
-}
-
-async function loadDockerCandidates() {
-  const target = document.querySelector('#docker-candidates');
-  target.textContent = tr('dockerScanning');
-  const response = await api('/api/import/docker');
-  if (!response.ok) {
-    target.textContent = (await response.json()).detail || tr('dockerScanFailed');
-    return;
-  }
-  const candidates = await response.json();
-  if (!candidates.length) {
-    target.textContent = tr('noContainers');
-    return;
-  }
-  target.innerHTML = candidates.map(candidate =>
-    '<div class="candidate">' +
-      '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(candidate.name) + '</strong><code>' + esc(candidate.id) + '</code></div>' +
-      '<div><span>' + esc(tr('image')) + '</span><strong>' + esc(candidate.image) + '</strong></div>' +
-      '<div><span>' + esc(tr('compose')) + '</span><strong>' + esc(candidate.compose_project || '-') + '</strong><code>' + esc(candidate.compose_service || '-') + '</code></div>' +
-      '<button type="button" ' + (candidate.already_configured ? 'disabled' : '') + ' onclick="importCandidate(\'' + esc(candidate.id) + '\')"><i data-lucide="' + (candidate.already_configured ? 'check' : 'download') + '" aria-hidden="true"></i><span>' + (candidate.already_configured ? esc(tr('imported')) : esc(tr('import'))) + '</span></button>' +
-    '</div>'
-  ).join('');
-  refreshIcons();
-}
-
-async function importCandidate(id) {
-  await api('/api/import/docker/' + encodeURIComponent(id), {method: 'POST'});
-  await Promise.all([loadServiceSettings(), loadDockerCandidates()]);
-}
 '''

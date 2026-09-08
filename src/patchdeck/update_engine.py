@@ -3,8 +3,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-from dataclasses import dataclass
-from pathlib import Path
 import re
 import secrets
 import socket
@@ -15,12 +13,14 @@ import threading
 import time
 import urllib.request
 import uuid
-from urllib.parse import quote
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from .docker_import import docker_get
 from .models import ServiceConfig, ServiceStatus, Settings, UpdatePolicy
-from .store import JsonStore
+from .store import JsonStore, atomic_write_text
 
 DOCKER_BIN = os.environ.get("PATCHDECK_DOCKER_BIN", "/usr/bin/docker")
 COMPOSE_BIN = os.environ.get("PATCHDECK_COMPOSE_BIN", "/usr/libexec/docker/cli-plugins/docker-compose")
@@ -72,12 +72,17 @@ class UpdateEngine:
         self.queue_file = self.state_dir / "update-queue.json"
         self._active_updates: dict[str, dict[str, Any]] = {}
         self._active_lock = threading.Lock()
+        self._audit_lock = threading.Lock()
+        self._last_run_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._background_threads: list[threading.Thread] = []
         self._mqtt_started = False
         self._mqtt_start_lock = threading.Lock()
         self._registry_cache_lock = threading.Lock()
         self._force_registry_refresh_lock = threading.Lock()
         self._queue_lock = threading.Condition(threading.Lock())
         self._queue_worker_started = False
+        self._queue_worker_thread: threading.Thread | None = None
         self._queue_jobs = self._load_queue()
 
     def _load_queue(self) -> list[dict[str, Any]]:
@@ -103,10 +108,16 @@ class UpdateEngine:
 
     def start_queue_worker(self) -> None:
         with self._queue_lock:
-            if self._queue_worker_started:
+            if self._queue_worker_thread and self._queue_worker_thread.is_alive():
                 return
+            self._stop_event.clear()
             self._queue_worker_started = True
-        threading.Thread(target=self._queue_worker, daemon=True, name="patchdeck-update-queue").start()
+            self._queue_worker_thread = threading.Thread(
+                target=self._queue_worker,
+                daemon=True,
+                name="patchdeck-update-queue",
+            )
+            self._queue_worker_thread.start()
 
     def enqueue_update(self, service: ServiceConfig, source: str) -> tuple[dict[str, Any], bool]:
         self.start_queue_worker()
@@ -134,29 +145,46 @@ class UpdateEngine:
         return jobs
 
     def _queue_worker(self) -> None:
-        while True:
+        try:
+            while not self._stop_event.is_set():
+                with self._queue_lock:
+                    job = next((item for item in self._queue_jobs if item.get("state") == "queued"), None)
+                    if not job:
+                        self._queue_lock.wait(timeout=30)
+                        continue
+                    job.update({"state": "running", "phase": "Preparing update", "started_at": int(time.time())})
+                    self._save_queue_locked()
+                service_id = str(job.get("service_id") or "")
+                try:
+                    service = self.store.get_service(service_id)
+                    if not service or not service_update_enabled(service):
+                        ok, message = False, "Service is no longer enabled for updates."
+                    else:
+                        ok, message = self.perform_update(service, str(job.get("source") or "queue"))
+                except Exception as exc:
+                    ok = False
+                    message = "Update failed because of an unexpected internal error."
+                    try:
+                        self.audit("update_worker_error", service=service_id, error=repr(exc), job_id=job.get("id"))
+                    except Exception:
+                        pass
+                finally:
+                    with self._queue_lock:
+                        job.update({
+                            "state": "succeeded" if ok else "failed",
+                            "phase": message,
+                            "finished_at": int(time.time()),
+                        })
+                        self._save_queue_locked()
+                        self._queue_lock.notify_all()
+        finally:
             with self._queue_lock:
-                job = next((item for item in self._queue_jobs if item.get("state") == "queued"), None)
-                if not job:
-                    self._queue_lock.wait(timeout=30)
-                    continue
-                job.update({"state": "running", "phase": "Preparing update", "started_at": int(time.time())})
-                self._save_queue_locked()
-            service = self.store.get_service(str(job.get("service_id") or ""))
-            if not service or not service_update_enabled(service):
-                ok, message = False, "Service is no longer enabled for updates."
-            else:
-                ok, message = self.perform_update(service, str(job.get("source") or "queue"))
-            with self._queue_lock:
-                job.update({"state": "succeeded" if ok else "failed", "phase": message, "finished_at": int(time.time())})
-                self._save_queue_locked()
-                self._queue_lock.notify_all()
+                self._queue_worker_started = False
+                self._queue_worker_thread = None
 
     def audit(self, event: str, **fields: object) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": event, **fields}
-        with self.audit_log.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, sort_keys=True) + "\n")
+        with self._audit_lock:
+            append_audit_log(self.state_dir, event, **fields)
 
     def statuses(self, force_registry_refresh: bool = False) -> list[ServiceStatus]:
         if force_registry_refresh:
@@ -186,12 +214,12 @@ class UpdateEngine:
         last_runs: dict[str, Any] | None = None,
     ) -> ServiceStatus:
         service_id = service.id
-        running = self.active_update(service_id)
+        active_update = self.active_update(service_id)
         mock = service.metadata.get("mock_status") if service.metadata else None
         if isinstance(mock, dict):
             current = mock.get("current_version")
             latest = mock.get("latest_version")
-            running = bool(mock.get("update_in_progress"))
+            mock_update_in_progress = bool(mock.get("update_in_progress"))
             return ServiceStatus(
                 service_id=service_id,
                 id=service_id,
@@ -204,10 +232,10 @@ class UpdateEngine:
                 release_notes_url=mock.get("release_notes_url"),
                 update_available=bool(mock.get("update_available", current != latest)),
                 update_enabled=False,
-                update_in_progress=running,
+                update_in_progress=mock_update_in_progress,
                 update_percentage=mock.get("update_percentage"),
                 update_started_at=mock.get("update_started_at"),
-                update_source=mock.get("update_source", "demo") if running else None,
+                update_source=mock.get("update_source", "demo") if mock_update_in_progress else None,
                 last_run=mock.get("last_run"),
                 checked_at=int(time.time()),
             )
@@ -230,7 +258,7 @@ class UpdateEngine:
             latest_digest = comparable_image_digest(local_latest_details, image)
             arch = (details or {}).get("Architecture") or (local_latest_details or {}).get("Architecture") or "amd64"
             os_name = (details or {}).get("Os") or (local_latest_details or {}).get("Os") or "linux"
-            if not running:
+            if not active_update:
                 remote_label, remote_digest = self.cached_latest_image_info(
                     image,
                     arch,
@@ -258,7 +286,7 @@ class UpdateEngine:
             logo_url=service.logo_url or service.metadata.get("logo_url"),
             icon_slug=service.icon_slug or service.metadata.get("icon_slug"),
             image=image,
-            state=(running or {}).get("phase") or container_state,
+            state=(active_update or {}).get("phase") or container_state,
             current_version=current_display,
             latest_version=latest_display,
             current_digest=current_digest,
@@ -266,10 +294,10 @@ class UpdateEngine:
             release_notes_url=self.release_notes_url(service.release_notes or service.metadata.get("release_notes"), latest_label),
             update_available=update_available,
             update_enabled=service_update_enabled(service),
-            update_in_progress=bool(running),
-            update_percentage=(running or {}).get("update_percentage"),
-            update_started_at=(running or {}).get("started_at"),
-            update_source=(running or {}).get("source"),
+            update_in_progress=bool(active_update),
+            update_percentage=(active_update or {}).get("update_percentage"),
+            update_started_at=(active_update or {}).get("started_at"),
+            update_source=(active_update or {}).get("source"),
             last_run=(last_runs if last_runs is not None else self.load_last_runs()).get(service_id),
             checked_at=int(time.time()),
         )
@@ -288,18 +316,48 @@ class UpdateEngine:
                 self.publish_service_state(service, in_progress=True)
                 return False, "An update is already running. Please wait."
             self.mark_update_active(service_id, True, source, phase="Preparing update", update_percentage=0)
-            self.audit("update_start", service=service_id, source=source)
-            self.publish_service_state(service, in_progress=True, update_percentage=0)
-            result = self.run_update(service, source)
-            if result.deferred:
-                self.audit("update_detached", service=service_id, source=source, output=result.output[-1200:])
-                return True, result.message or "Self-update started."
-            ok = result.exit_code == 0
-            self.save_last_run(service_id, {"ts": int(time.time()), "ok": ok, "exit_code": result.exit_code, "source": source, "output": result.output[-2000:]})
-            self.audit("update_done", service=service_id, source=source, ok=ok, exit_code=result.exit_code, output=result.output[-1200:])
-            self.mark_update_active(service_id, False)
-            self.publish_service_state(service, in_progress=False, update_percentage=None)
-            return ok, "Update completed." if ok else "Update failed. Details are available in the audit log."
+            keep_active = False
+            try:
+                self.audit("update_start", service=service_id, source=source)
+                self.publish_service_state(service, in_progress=True, update_percentage=0)
+                try:
+                    result = self.run_update(service, source)
+                except Exception as exc:
+                    self.audit("update_exception", service=service_id, source=source, error=repr(exc))
+                    result = UpdateRunResult(1, f"Unexpected internal error: {exc!r}")
+                if result.deferred:
+                    keep_active = True
+                    self.audit("update_detached", service=service_id, source=source, output=result.output[-1200:])
+                    return True, result.message or "Self-update started."
+                ok = result.exit_code == 0
+                self.save_last_run(
+                    service_id,
+                    {
+                        "ts": int(time.time()),
+                        "ok": ok,
+                        "exit_code": result.exit_code,
+                        "source": source,
+                        "output": result.output[-2000:],
+                    },
+                )
+                self.audit(
+                    "update_done",
+                    service=service_id,
+                    source=source,
+                    ok=ok,
+                    exit_code=result.exit_code,
+                    output=result.output[-1200:],
+                )
+                message = (
+                    "Update completed."
+                    if ok
+                    else "Update failed. Details are available in the audit log."
+                )
+                return ok, message
+            finally:
+                if not keep_active:
+                    self.mark_update_active(service_id, False)
+                    self.publish_service_state(service, in_progress=False, update_percentage=None)
 
     def run_update(self, service: ServiceConfig, source: str = "unknown") -> UpdateRunResult:
         service_id = service.id
@@ -341,9 +399,10 @@ class UpdateEngine:
         return load_json(self.last_run_file, {})
 
     def save_last_run(self, service_id: str, payload: dict[str, Any]) -> None:
-        data = self.load_last_runs()
-        data[service_id] = payload
-        atomic_json(self.last_run_file, data)
+        with self._last_run_lock:
+            data = self.load_last_runs()
+            data[service_id] = payload
+            atomic_json(self.last_run_file, data)
 
     def load_self_update_state(self) -> dict[str, Any] | None:
         state = load_json(self.self_update_state_file, None)
@@ -634,7 +693,7 @@ class UpdateEngine:
         self.audit("registry_cache_refresh_failed", image=image, arch=arch, os=os_name)
         if isinstance(cached, dict) and not cache_mismatches_local:
             return cached.get("label"), cached.get("digest")
-        if cache_matches_local:
+        if cache_matches_local and isinstance(cached, dict):
             return cached.get("label"), cached.get("digest")
         return None, None
 
@@ -682,17 +741,34 @@ class UpdateEngine:
         return url
 
     def start_background_tasks(self) -> None:
+        self._stop_event.clear()
         self.start_queue_worker()
         with self._mqtt_start_lock:
             if self._mqtt_started:
                 return
             self._mqtt_started = True
-        threading.Thread(target=self._mqtt_publish_loop, daemon=True).start()
-        threading.Thread(target=self._mqtt_command_loop, daemon=True).start()
+        threads = [
+            threading.Thread(target=self._mqtt_publish_loop, daemon=True, name="patchdeck-mqtt-publish"),
+            threading.Thread(target=self._mqtt_command_loop, daemon=True, name="patchdeck-mqtt-command"),
+        ]
+        self._background_threads = threads
+        for thread in threads:
+            thread.start()
         settings = self.effective_settings()
         if not mqtt_enabled(settings) and settings.mqtt_host:
             self.clear_mqtt_entities(force_mqtt_enabled(settings))
         self.audit("mqtt_background_tasks_started")
+
+    def stop_background_tasks(self, join_timeout: float = 1.0) -> None:
+        self._stop_event.set()
+        with self._queue_lock:
+            self._queue_lock.notify_all()
+        current = threading.current_thread()
+        for thread in [self._queue_worker_thread, *self._background_threads]:
+            if thread and thread is not current and thread.is_alive():
+                thread.join(timeout=join_timeout)
+        with self._mqtt_start_lock:
+            self._mqtt_started = False
 
     def effective_settings(self) -> Settings:
         return effective_settings(self.store.get_settings())
@@ -720,30 +796,40 @@ class UpdateEngine:
             self.audit("mqtt_state_publish_failed", service=service.id, error=str(exc))
 
     def _mqtt_publish_loop(self) -> None:
-        time.sleep(15)
-        while True:
+        if self._stop_event.wait(15):
+            return
+        while not self._stop_event.is_set():
             try:
                 settings = effective_settings(self.store.get_settings())
                 if mqtt_enabled(settings):
                     mqtt_publish_discovery(settings, self.statuses(), self.audit)
             except Exception as exc:
                 self.audit("mqtt_loop_error", error=str(exc))
-            time.sleep(300)
+            if self._stop_event.wait(300):
+                return
 
     def _mqtt_command_loop(self) -> None:
-        while True:
-            settings = effective_settings(self.store.get_settings())
+        while not self._stop_event.is_set():
+            try:
+                settings = effective_settings(self.store.get_settings())
+            except Exception as exc:
+                self.audit("mqtt_settings_invalid", error=str(exc))
+                if self._stop_event.wait(30):
+                    return
+                continue
             sock = mqtt_connect(settings, "patchdeck-sub", self.audit, keepalive=0)
             if not sock:
-                time.sleep(30)
+                if self._stop_event.wait(30):
+                    return
                 continue
             try:
                 if not mqtt_subscribe(sock, f"{settings.mqtt_base_topic}/+/command", self.audit):
                     sock.close()
-                    time.sleep(30)
+                    if self._stop_event.wait(30):
+                        return
                     continue
                 self.audit("mqtt_command_subscribed", topic=f"{settings.mqtt_base_topic}/+/command")
-                while True:
+                while not self._stop_event.is_set():
                     if not mqtt_enabled(effective_settings(self.store.get_settings())):
                         self.audit("mqtt_command_unsubscribed", reason="disabled")
                         try:
@@ -751,7 +837,10 @@ class UpdateEngine:
                         except Exception:
                             pass
                         break
-                    packet = _mqtt_read_packet(sock)
+                    try:
+                        packet = _mqtt_read_packet(sock)
+                    except TimeoutError:
+                        continue
                     if packet is None:
                         raise ConnectionError("MQTT connection closed")
                     packet_type = packet[0] >> 4
@@ -767,7 +856,14 @@ class UpdateEngine:
                     sock.close()
                 except Exception:
                     pass
-                time.sleep(30)
+                if self._stop_event.wait(30):
+                    return
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
 
     def handle_mqtt_command(self, topic: str, payload: bytes) -> None:
         settings = effective_settings(self.store.get_settings())
@@ -840,10 +936,16 @@ def compose_command(compose_files: list[str], *args: str) -> list[str]:
 
 
 def append_audit_log(state_dir: Path, event: str, **fields: object) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": event, **fields}
-    with (state_dir / "audit.log").open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    path = state_dir / "audit.log"
+    encoded = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.write(descriptor, encoded)
+    finally:
+        os.close(descriptor)
+    path.chmod(0o600)
 
 
 def save_last_run_file(path: Path, service_id: str, payload: dict[str, Any]) -> None:
@@ -1110,10 +1212,7 @@ def load_json(path: Path, default: Any) -> Any:
 
 
 def atomic_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def docker_status_snapshot() -> DockerStatusSnapshot | None:
@@ -1324,9 +1423,12 @@ def latest_registry_version(image: str, audit: Any, arch: str = "amd64", os_name
             # arm64 image changed (and vice versa).
             audit("registry_platform_not_found", registry=registry, repo=repo, tag=tag, arch=arch, os=os_name)
             return None, None
-        selected, _selected_digest = registry_json(registry, repo, f"manifests/{digest}", token, audit, accept)
-        if not isinstance(selected, dict):
+        selected_candidate, _selected_digest = registry_json(
+            registry, repo, f"manifests/{digest}", token, audit, accept
+        )
+        if not isinstance(selected_candidate, dict):
             return None, None
+        selected = selected_candidate
     config_digest = ((selected or {}).get("config") or {}).get("digest")
     if not config_digest:
         return None, top_digest
@@ -1401,7 +1503,7 @@ def effective_settings(settings: Settings) -> Settings:
     for key, names in env_map.items():
         for name in names:
             value = os.environ.get(name)
-            if value not in (None, ""):
+            if value:
                 if key == "mqtt_port":
                     data[key] = int(value)
                 elif key == "mqtt_enabled":
@@ -1600,7 +1702,7 @@ def mqtt_connect(settings: Settings, client_id: str, audit: Any, keepalive: int 
         return None
     try:
         sock = socket.create_connection((settings.mqtt_host, settings.mqtt_port), timeout=15)
-        sock.settimeout(max(15, keepalive + 10) if keepalive else None)
+        sock.settimeout(max(15, keepalive + 10) if keepalive else 15)
         payload = _mqtt_encode_str("MQTT") + bytes([4, 0xC2]) + struct.pack("!H", keepalive)
         payload += _mqtt_encode_str(client_id)
         payload += _mqtt_encode_str(settings.mqtt_user)

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+Theme = Literal["system", "light", "dark"]
 
 
 class UpdatePolicy(StrEnum):
@@ -48,7 +50,7 @@ class DockerImportCandidate(BaseModel):
 
 
 class Settings(BaseModel):
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     update_interval_minutes: int = Field(default=60, ge=1, le=10080)
     language: str = Field(default="en", pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
     mqtt_enabled: bool = False
@@ -64,11 +66,32 @@ class Settings(BaseModel):
         "update-hub/demo-service/latest_version",
         "update-hub/homeassistant/installed_version",
     ])
-    theme: str = "system"
+    theme: Theme = "system"
     base_url: str = ""
     registry_refresh_hour: int = Field(default=3, ge=0, le=23)
     registry_refresh_minute: int = Field(default=45, ge=0, le=59)
     registry_refresh_window_minutes: int = Field(default=20, ge=1, le=1440)
+
+
+class SettingsPatch(BaseModel):
+    """Partial settings accepted by the autosave API."""
+
+    schema_version: Literal[1] | None = None
+    update_interval_minutes: int | None = Field(default=None, ge=1, le=10080)
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
+    mqtt_enabled: bool | None = None
+    mqtt_host: str | None = None
+    mqtt_port: int | None = Field(default=None, ge=1, le=65535)
+    mqtt_user: str | None = None
+    mqtt_password: str | None = None
+    mqtt_discovery_prefix: str | None = None
+    mqtt_base_topic: str | None = None
+    mqtt_retained_cleanup_topics: list[str] | None = None
+    theme: Theme | None = None
+    base_url: str | None = None
+    registry_refresh_hour: int | None = Field(default=None, ge=0, le=23)
+    registry_refresh_minute: int | None = Field(default=None, ge=0, le=59)
+    registry_refresh_window_minutes: int | None = Field(default=None, ge=1, le=1440)
 
 
 class ServiceStatus(BaseModel):

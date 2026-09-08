@@ -19,7 +19,7 @@ The image contains:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.5.3
+    image: ghcr.io/bxjrke/patchdeck:0.6.0
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -42,6 +42,8 @@ Open Patchdeck at `http://SERVER:8000`.
 - update lock and last-run state
 - registry cache
 - cached icons
+
+Configuration and operational state are replaced atomically. Files containing configuration or credentials are written with mode `0600`. If an existing `settings.json` or `services.json` is invalid, Patchdeck fails startup instead of silently resetting it. Repair or restore the affected file from backup before restarting.
 
 The host path can be any persistent directory you choose, for example `/opt/docker/patchdeck:/data`, `/srv/patchdeck:/data`, or a named Docker volume like `patchdeck-data:/data`. The important part is the container path: keep it as `/data` unless you also change `PATCHDECK_DATA_DIR`.
 
@@ -67,6 +69,8 @@ If MQTT is disabled after it was active, Patchdeck publishes empty retained disc
 
 Mounting the Docker socket gives Patchdeck effective control over the host Docker daemon. Treat access to Patchdeck like access to Docker itself.
 
+The application requires `X-Patchdeck-Request: 1` on state-changing HTTP API calls and applies a strict same-origin browser policy. This blocks common drive-by form submissions but is not user authentication.
+
 Recommended deployment:
 
 - Keep Patchdeck on a private LAN or VPN.
@@ -88,8 +92,8 @@ If the new container fails its health check or the UI does not behave as expecte
 
 The release workflow publishes:
 
-- `ghcr.io/bxjrke/patchdeck:0.5.3` for version tags like `v0.5.3`
-- `ghcr.io/bxjrke/patchdeck:0.3` for the matching minor line
+- `ghcr.io/bxjrke/patchdeck:0.6.0` for version tags like `v0.6.0`
+- `ghcr.io/bxjrke/patchdeck:0.6` for the matching minor line
 - `ghcr.io/bxjrke/patchdeck:main` for pushes to `main`
 - `ghcr.io/bxjrke/patchdeck:sha-...` for immutable commit images
 

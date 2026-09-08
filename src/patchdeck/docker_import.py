@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import re
 import socket
-from urllib.parse import quote
 from typing import Any
+from urllib.parse import quote
 
 from .models import AdapterKind, DockerImportCandidate, ServiceConfig, UpdatePolicy
 

@@ -1,14 +1,15 @@
 import json
 import threading
-import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from patchdeck import docker_import, icon_cache, main, update_engine
+from patchdeck import __version__, docker_import, icon_cache, main, update_engine
+from patchdeck import api as api_module
 from patchdeck.docker_import import icon_slug_for_service, preferred_icon_slug
 from patchdeck.main import app
 from patchdeck.models import ServiceConfig, ServiceStatus, Settings
+from patchdeck.runtime import AppRuntime
 from patchdeck.store import JsonStore
 from patchdeck.update_engine import (
     UpdateEngine,
@@ -21,14 +22,17 @@ from patchdeck.update_engine import (
     run_self_update_helper,
 )
 
-
-client = TestClient(app)
+client = TestClient(app, headers={"X-Patchdeck-Request": "1"})
 
 
 def use_test_store(tmp_path, monkeypatch) -> JsonStore:
     test_store = JsonStore(tmp_path)
+    test_engine = UpdateEngine(test_store)
+    test_runtime = AppRuntime(store=test_store, engine=test_engine)
     monkeypatch.setattr(main, "store", test_store)
-    monkeypatch.setattr(main, "engine", UpdateEngine(test_store))
+    monkeypatch.setattr(main, "engine", test_engine)
+    monkeypatch.setattr(main, "runtime", test_runtime)
+    monkeypatch.setattr(main.app.state, "runtime", test_runtime)
     return test_store
 
 
@@ -41,77 +45,89 @@ def test_healthz() -> None:
 def test_html_pages() -> None:
     index_response = client.get("/")
     settings_response = client.get("/settings")
+    common_response = client.get("/static/common.js")
+    home_js_response = client.get("/static/home.js")
+    settings_js_response = client.get("/static/settings.js")
+    for asset_response in (common_response, home_js_response, settings_js_response):
+        assert asset_response.status_code == 200
+    settings_source = settings_response.text + common_response.text + settings_js_response.text
+    home_source = index_response.text + common_response.text + home_js_response.text
 
     assert index_response.status_code == 200
-    assert 'id="docker-candidates"' not in index_response.text
+    assert 'id="docker-candidates"' not in home_source
     assert settings_response.status_code == 200
-    assert "Update check interval" in settings_response.text
-    assert "Update-Check-Intervall Minuten" not in settings_response.text
-    assert "min" in settings_response.text
-    assert 'id="mqtt-enabled" type="checkbox" role="switch"' in settings_response.text
-    assert 'id="mqtt-fields"' in settings_response.text
-    assert 'id="language"' in settings_response.text
-    assert "Release notes source" in settings_response.text
-    assert "Docker-Scan Importvorschläge" not in settings_response.text
-    assert "Icon path" in settings_response.text
-    assert "stores found files locally" in settings_response.text
-    assert "Hinzufügen" not in settings_response.text
-    assert "{version}" in settings_response.text
-    assert 'let currentLanguage = \'en\';' in settings_response.text
-    assert "/static/i18n/" in settings_response.text
-    assert "const I18N = {};" in settings_response.text
-    assert "Vorschauversion" not in settings_response.text
-    assert "saveButton(\"saveExistingService" not in settings_response.text
-    assert "cdn.simpleicons.org" not in settings_response.text
-    assert "save-button" in settings_response.text
-    assert 'data-save-action="settings"' not in settings_response.text
-    assert 'id="settings-save-status"' in settings_response.text
-    assert 'data-service-save-status=' in settings_response.text
-    assert "function showSaveStatus(target, state, field = null)" in settings_response.text
-    assert "function showSaveFeedback(field)" in settings_response.text
-    assert "save-success" in settings_response.text
-    assert "function retrySave(target)" in settings_response.text
-    assert "saveExistingService(id, version)" in settings_response.text
-    assert 'id="mqtt-state-label"' in settings_response.text
-    assert "lucide" in settings_response.text
-    assert "Docker Import" in settings_response.text
-    assert "The scan is always available manually" in settings_response.text
-    assert 'class="footer"' in settings_response.text
-    assert 'data-i18n="footer"' not in settings_response.text
-    assert 'aria-label="Patchdeck version"' in settings_response.text
-    assert "Patchdeck 0.5.3" in settings_response.text
-    assert '/static/favicon.png?v0.5.3-logo4' in index_response.text
-    assert '/static/favicon.svg?v0.5.3-logo4' in index_response.text
-    assert '/static/apple-touch-icon.png?v0.5.3-logo4' in index_response.text
-    assert '<img class="brand-logo"' not in index_response.text
-    assert 'data-i18n="settings">Settings</span>' in index_response.text
-    assert 'id="summary-state"' not in index_response.text
-    assert 'id="refresh-status"' in index_response.text
-    assert 'id="update-all"' in index_response.text
-    assert 'button.hidden = count === 0' in index_response.text
-    assert "count + ' ' + tr('updatesInstall')" in index_response.text
-    assert 'data-lucide="refresh-cw"' in index_response.text
-    assert 'data-i18n="refreshUpdates"' in index_response.text
-    assert 'refreshAllServices()' in index_response.text
-    assert "api('/api/status?refresh=true')" in index_response.text
-    assert 'spin-icon' in index_response.text
-    assert "service.update_available ? 'download'" in index_response.text
-    assert "'circle-alert' : 'check'" in index_response.text
-    assert 'badge-action' in index_response.text
-    assert 'version-link' in index_response.text
-    assert 'Release Notes</a>' not in index_response.text
-    assert 'repullCurrent' not in index_response.text
-    assert "service-policy" not in settings_response.text
-    assert "Konfigurieren" not in index_response.text
-    assert "previewReleaseNotes('#service-release-notes')" in settings_response.text
-    assert "function previewReleaseNotes(selector)" in settings_response.text
-    assert "releaseNotesPreviewInvalid" in settings_response.text
-    assert "function waitForUpdateJob(jobId)" in index_response.text
-    assert "function waitForUpdateJobs(jobIds)" in index_response.text
-    assert "/api/update-queue" in index_response.text
-    assert "/preview-update" not in index_response.text
-    assert "function orderHomeServices(statuses, preserveOrder)" in index_response.text
-    assert "await loadHome({preserveOrder: true})" in index_response.text
+    assert "Update check interval" in settings_source
+    assert "Update-Check-Intervall Minuten" not in settings_source
+    assert "min" in settings_source
+    assert 'id="mqtt-enabled" type="checkbox" role="switch"' in settings_source
+    assert 'id="mqtt-fields"' in settings_source
+    assert 'id="language"' in settings_source
+    assert "Release notes source" in settings_source
+    assert "Docker-Scan Importvorschläge" not in settings_source
+    assert "Icon path" in settings_source
+    assert "stores found files locally" in settings_source
+    assert "Hinzufügen" not in settings_source
+    assert "{version}" in settings_source
+    assert 'let currentLanguage = \'en\';' in settings_source
+    assert "/static/i18n/" in settings_source
+    assert "const I18N = {};" in settings_source
+    assert "Vorschauversion" not in settings_source
+    assert "saveButton(\"saveExistingService" not in settings_source
+    assert "cdn.simpleicons.org" not in settings_source
+    assert "save-button" in settings_source
+    assert 'data-save-action="settings"' not in settings_source
+    assert 'id="settings-save-status"' in settings_source
+    assert 'data-service-save-status=' in settings_source
+    assert "function showSaveStatus(target, state, field = null)" in settings_source
+    assert "function showSaveFeedback(field)" in settings_source
+    assert "save-success" in settings_source
+    assert "function retrySave(target)" in settings_source
+    assert "saveExistingService(id, version)" in settings_source
+    assert 'id="mqtt-state-label"' in settings_source
+    assert "lucide" in settings_source
+    assert "Docker Import" in settings_source
+    assert "The scan is always available manually" in settings_source
+    assert 'class="footer"' in settings_source
+    assert 'data-i18n="footer"' not in settings_source
+    assert 'aria-label="Patchdeck version"' in settings_source
+    assert f"Patchdeck {__version__}" in settings_source
+    assert f'/static/favicon.png?v{__version__}-logo4' in home_source
+    assert f'/static/favicon.svg?v{__version__}-logo4' in home_source
+    assert f'/static/apple-touch-icon.png?v{__version__}-logo4' in home_source
+    assert '<img class="brand-logo"' not in home_source
+    assert 'data-i18n="settings">Settings</span>' in home_source
+    assert 'id="summary-state"' not in home_source
+    assert 'id="refresh-status"' in home_source
+    assert 'id="update-all"' in home_source
+    assert 'button.hidden = count === 0' in home_source
+    assert "count + ' ' + tr('updatesInstall')" in home_source
+    assert 'data-lucide="refresh-cw"' in home_source
+    assert 'data-i18n="refreshUpdates"' in home_source
+    assert 'refreshAllServices()' in home_source
+    assert "api('/api/status?refresh=true')" in home_source
+    assert 'spin-icon' in home_source
+    assert "service.update_available ? 'download'" in home_source
+    assert "'circle-alert' : 'check'" in home_source
+    assert 'badge-action' in home_source
+    assert 'version-link' in home_source
+    assert 'Release Notes</a>' not in home_source
+    assert 'repullCurrent' not in home_source
+    assert "service-policy" not in settings_source
+    assert "Konfigurieren" not in home_source
+    assert 'data-action="preview-release-notes"' in settings_source
+    assert "function previewReleaseNotes(selector)" in settings_source
+    assert "releaseNotesPreviewInvalid" in settings_source
+    assert "function waitForUpdateJob(jobId)" in home_source
+    assert "function waitForUpdateJobs(jobIds)" in home_source
+    assert "/api/update-queue" in home_source
+    assert "/preview-update" not in home_source
+    assert "function orderHomeServices(statuses, preserveOrder)" in home_source
+    assert "await loadHome({preserveOrder: true})" in home_source
+    assert "onclick=" not in settings_source + home_source
+    assert "unpkg.com" not in settings_source + home_source
+    assert "X-Patchdeck-Request" in common_response.text
+    assert "/static/icons.svg#" in common_response.text
+    assert "mqtt_password" not in settings_js_response.text.split("if (mqttPasswordDirty)")[0].split("function readSettingsPayload()")[-1]
 
 
 def test_static_icons() -> None:
@@ -203,7 +219,7 @@ def test_service_refresh_from_docker(tmp_path, monkeypatch) -> None:
             icon_slug="bazarr",
         )
 
-    monkeypatch.setattr(main, "service_from_container", fake_service_from_container)
+    monkeypatch.setattr(api_module, "service_from_container", fake_service_from_container)
 
     response = client.post("/api/services/bazarr/refresh")
 
@@ -258,14 +274,14 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
             update_policy=base.update_policy,
         )
 
-    monkeypatch.setattr(main, "service_from_container", fake_service_from_container)
+    monkeypatch.setattr(api_module, "service_from_container", fake_service_from_container)
 
     main.ensure_self_service()
 
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == "/static/patchdeck.svg?v0.5.3-logo4"
+    assert service.logo_url == f"/static/patchdeck.svg?v{__version__}-logo4"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"
