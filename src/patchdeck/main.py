@@ -149,6 +149,7 @@ def page_html(active: str) -> str:
         <button type="button" id="update-all" class="badge badge-action update summary-action" data-action="run-all-updates" hidden><i data-lucide="list-restart" aria-hidden="true"></i><span></span></button>
         <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" data-action="refresh-all-services" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
       </div>
+      <div id="home-feedback" class="feedback" role="status" aria-live="polite" hidden></div>
     </header>
 
     {content}

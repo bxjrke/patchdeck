@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .docker_import import docker_get
+from .docker_import import docker_get, icon_slug_for_service
 from .models import ServiceConfig, ServiceStatus, Settings, UpdatePolicy
 from .store import JsonStore, atomic_write_text
 
@@ -103,6 +103,30 @@ class UpdateEngine:
         with self._queue_lock:
             jobs = [dict(job) for job in self._queue_jobs]
         active = next((job for job in jobs if job.get("state") == "running"), None)
+        if active:
+            progress = self.active_update(str(active.get("service_id") or ""))
+            if progress:
+                active.update(progress)
+        # A detached self-update outlives its queue worker. Report the helper's
+        # real result rather than treating successful helper launch as completion.
+        helper = self.load_self_update_state()
+        if helper:
+            helper_job = next((job for job in reversed(jobs) if job.get("service_id") == "patchdeck"), None)
+            if helper_job and (helper_job.get("started_at") or helper_job.get("created_at") or 0) <= helper.get("started_at", 0):
+                if helper.get("in_progress"):
+                    progress = self.active_update("patchdeck")
+                    if progress:
+                        helper_job.update({"state": "running", **progress})
+                        active = helper_job
+                    helper = self.load_self_update_state() or helper
+                if not helper.get("in_progress") and "ok" in helper:
+                    helper_job.update({
+                        "state": "succeeded" if helper["ok"] else "failed",
+                        "phase": helper.get("phase"),
+                        "finished_at": helper.get("finished_at"),
+                    })
+                    if active is helper_job:
+                        active = None
         pending = [job for job in jobs if job.get("state") == "queued"]
         return {"active": active, "pending": pending, "recent": [job for job in jobs if job.get("state") in {"succeeded", "failed"}][-20:]}
 
@@ -132,16 +156,37 @@ class UpdateEngine:
             self.audit("update_queued", service=service.id, source=source, job_id=job["id"])
             return dict(job), True
 
-    def enqueue_all_updates(self, source: str) -> list[dict[str, Any]]:
-        statuses = {item.service_id: item for item in self.statuses(force_registry_refresh=True)}
-        services = [service for service in self.store.list_services() if service_update_enabled(service) and statuses.get(service.id) and statuses[service.id].update_available]
+    def enqueue_all_updates(self, source: str, service_ids: list[str] | None = None) -> list[dict[str, Any]]:
+        configured_services = {service.id: service for service in self.store.list_services()}
+        if service_ids is None:
+            # The dashboard sends its current candidates so the click stays
+            # responsive. Keep the legacy API shape useful without forcing a
+            # synchronous registry refresh for callers that omit them.
+            statuses = {item.service_id: item for item in self.statuses()}
+            services = [
+                service
+                for service in configured_services.values()
+                if service_update_enabled(service)
+                and statuses.get(service.id)
+                and statuses[service.id].update_available
+            ]
+        else:
+            services = [
+                configured_services[service_id]
+                for service_id in service_ids
+                if service_id in configured_services
+                and service_update_enabled(configured_services[service_id])
+            ]
         # A self-update replaces this worker. Always perform it after every other service.
         services.sort(key=lambda service: service.id == "patchdeck")
         jobs = []
+        seen: set[str] = set()
         for service in services:
-            job, added = self.enqueue_update(service, source)
-            if added:
-                jobs.append(job)
+            if service.id in seen:
+                continue
+            seen.add(service.id)
+            job, _added = self.enqueue_update(service, source)
+            jobs.append(job)
         return jobs
 
     def _queue_worker(self) -> None:
@@ -220,12 +265,16 @@ class UpdateEngine:
             current = mock.get("current_version")
             latest = mock.get("latest_version")
             mock_update_in_progress = bool(mock.get("update_in_progress"))
+            mock_image = service_image(service)
+            mock_icon_slug = service.icon_slug or service.metadata.get("icon_slug") or icon_slug_for_service(service.name, mock_image)
             return ServiceStatus(
                 service_id=service_id,
                 id=service_id,
                 name=service.name,
                 container=service_container(service),
                 image=service_image(service),
+                logo_url=service.logo_url or service.metadata.get("logo_url"),
+                icon_slug=mock_icon_slug,
                 state=mock.get("state", "demo"),
                 current_version=current,
                 latest_version=latest,
@@ -242,6 +291,7 @@ class UpdateEngine:
 
         image = service_image(service)
         container = service_container(service)
+        detected_icon_slug = service.icon_slug or service.metadata.get("icon_slug") or icon_slug_for_service(service.name, image)
         labels, details, container_state = docker_status_from_snapshot(docker_snapshot, container)
         if details is None:
             labels, details = docker_labels_for_container(container)
@@ -284,7 +334,7 @@ class UpdateEngine:
             name=service.name,
             container=container,
             logo_url=service.logo_url or service.metadata.get("logo_url"),
-            icon_slug=service.icon_slug or service.metadata.get("icon_slug"),
+            icon_slug=detected_icon_slug,
             image=image,
             state=(active_update or {}).get("phase") or container_state,
             current_version=current_display,

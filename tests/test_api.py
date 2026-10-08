@@ -233,6 +233,30 @@ def test_filebrowser_icon_is_detected() -> None:
     assert icon_slug_for_service("filebrowser", "filebrowser/filebrowser:s6") == "filebrowser"
 
 
+def test_grocy_icon_is_detected() -> None:
+    assert icon_slug_for_service("Grocy", "lscr.io/linuxserver/grocy:latest") == "grocy"
+
+
+def test_grocy_icon_is_available_for_existing_services(tmp_path, monkeypatch) -> None:
+    use_test_store(tmp_path, monkeypatch)
+    response = client.get("/api/icons/lookup/grocy")
+
+    assert response.status_code == 200
+    assert "image/svg+xml" in response.headers["content-type"]
+    assert "<svg" in response.text
+
+
+def test_icon_lookup_does_not_serve_files_outside_icon_directory(tmp_path, monkeypatch) -> None:
+    use_test_store(tmp_path, monkeypatch)
+    icon_dir = tmp_path / "icons"
+    icon_dir.mkdir()
+    outside = tmp_path / "private.svg"
+    outside.write_text("private", encoding="utf-8")
+    (icon_dir / "demo.svg").symlink_to(outside)
+
+    assert client.get("/api/icons/lookup/demo").status_code == 404
+
+
 def test_docker_import_enables_updates_by_default(monkeypatch) -> None:
     def fake_docker_get(path: str, socket_path: str = docker_import.DOCKER_SOCKET):
         assert path == "/containers/json?all=1"
@@ -362,6 +386,46 @@ def test_service_icon_is_cached_on_save(tmp_path, monkeypatch) -> None:
     assert put_response.status_code == 200
     assert put_response.json()["logo_url"] == "/api/icons/filebrowser.svg"
     assert icon_response.status_code == 200
+
+
+def test_service_icon_is_inferred_from_name_and_image(tmp_path, monkeypatch) -> None:
+    use_test_store(tmp_path, monkeypatch)
+
+    def fake_download_icon(icon_dir: Path, slug: str) -> Path:
+        icon_dir.mkdir(parents=True, exist_ok=True)
+        target = icon_dir / f"{slug}.svg"
+        target.write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
+        return target
+
+    monkeypatch.setattr(icon_cache, "download_icon", fake_download_icon)
+    response = client.put(
+        "/api/services/grocy",
+        json={
+            "id": "grocy",
+            "name": "Grocy",
+            "image": "lscr.io/linuxserver/grocy:latest",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["icon_slug"] == "grocy"
+    assert response.json()["logo_url"] == "/api/icons/grocy.svg"
+
+
+def test_update_all_endpoint_uses_dashboard_candidates(tmp_path, monkeypatch) -> None:
+    use_test_store(tmp_path, monkeypatch)
+    captured: list[tuple[str, list[str] | None]] = []
+
+    def fake_enqueue_all(source: str, service_ids: list[str] | None = None):
+        captured.append((source, service_ids))
+        return [{"id": "job-1", "service_id": "grocy", "state": "queued"}]
+
+    monkeypatch.setattr(main.engine, "enqueue_all_updates", fake_enqueue_all)
+    response = client.post("/api/updates", json={"service_ids": ["grocy", "homeassistant"]})
+
+    assert response.status_code == 202
+    assert captured == [("web", ["grocy", "homeassistant"])]
+    assert response.json()["queued"] == 1
 
 
 def test_generic_icon_slug_is_replaced_by_specific_detection() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -8,8 +9,16 @@ from fastapi.responses import FileResponse
 
 from .assets import PATCHDECK_LOGO_URL
 from .docker_import import list_container_candidates, service_from_container
-from .icon_cache import cache_service_icon
-from .models import DockerImportCandidate, ServiceConfig, ServiceStatus, Settings, SettingsPatch, UpdatePolicy
+from .icon_cache import cache_service_icon, cached_icon_for_slug, safe_icon_slug
+from .models import (
+    DockerImportCandidate,
+    ServiceConfig,
+    ServiceStatus,
+    Settings,
+    SettingsPatch,
+    UpdateAllRequest,
+    UpdatePolicy,
+)
 from .runtime import AppRuntime
 from .update_engine import mqtt_enabled, service_update_enabled
 
@@ -89,8 +98,8 @@ def update_service(service_id: str, runtime: RuntimeDependency) -> dict[str, obj
 
 
 @router.post("/updates", status_code=status.HTTP_202_ACCEPTED)
-def update_all_services(runtime: RuntimeDependency) -> dict[str, object]:
-    jobs = runtime.engine.enqueue_all_updates("web")
+def update_all_services(runtime: RuntimeDependency, payload: UpdateAllRequest | None = None) -> dict[str, object]:
+    jobs = runtime.engine.enqueue_all_updates("web", payload.service_ids if payload else None)
     return {"ok": True, "queued": len(jobs), "jobs": jobs}
 
 
@@ -118,6 +127,26 @@ def get_icon(filename: str, runtime: RuntimeDependency) -> FileResponse:
     icon_directory = (runtime.store.data_dir / "icons").resolve()
     path = (icon_directory / filename).resolve()
     if path.parent != icon_directory or not path.is_file():
+        raise HTTPException(status_code=404, detail="icon not found")
+    return FileResponse(path)
+
+
+@router.get("/icons/lookup/{slug}")
+def lookup_icon(slug: str, runtime: RuntimeDependency) -> FileResponse:
+    """Serve an already cached icon for a detected service slug."""
+
+    safe_slug = safe_icon_slug(slug)
+    if safe_slug != slug:
+        raise HTTPException(status_code=404, detail="icon not found")
+    path = cached_icon_for_slug(runtime.store.data_dir / "icons", safe_slug)
+    if not path and safe_slug == "grocy":
+        path = Path(__file__).parent / "static" / "grocy.svg"
+    if not path:
+        raise HTTPException(status_code=404, detail="icon not found")
+    if path.resolve().parent not in {
+        (runtime.store.data_dir / "icons").resolve(),
+        (Path(__file__).parent / "static").resolve(),
+    }:
         raise HTTPException(status_code=404, detail="icon not found")
     return FileResponse(path)
 

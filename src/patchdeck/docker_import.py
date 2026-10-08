@@ -25,6 +25,7 @@ def icon_slug_for_service(name: str, image: str) -> str | None:
         "infisical": ("infisical",),
         "bazarr": ("bazarr",),
         "filebrowser": ("filebrowser", "file-browser", "file browser"),
+        "grocy": ("grocy",),
         "jellyfin": ("jellyfin",),
         "jellyseerr": ("jellyseerr",),
         "radarr": ("radarr",),

@@ -33,7 +33,7 @@ uv run --no-sync mypy src/patchdeck
 5. Build the image locally with the release version as its OCI label:
 
 ```bash
-docker build --build-arg PATCHDECK_VERSION=0.6.0 -t patchdeck:test .
+docker build --build-arg PATCHDECK_VERSION=0.6.1 -t patchdeck:test .
 ```
 
 6. Check Docker Compose inside the image:
@@ -58,12 +58,12 @@ docker image inspect patchdeck:test --format '{{ index .Config.Labels "org.openc
 10. Create and push a SemVer tag prefixed with `v`:
 
 ```bash
-git tag v0.6.0
+git tag v0.6.1
 git push origin main
-git push origin v0.6.0
+git push origin v0.6.1
 ```
 
-The tag push publishes `ghcr.io/bxjrke/patchdeck:0.6.0` and `ghcr.io/bxjrke/patchdeck:0.6`.
+The tag push publishes `ghcr.io/bxjrke/patchdeck:0.6.1` and `ghcr.io/bxjrke/patchdeck:0.6`.
 
 ## Workflow Behavior
 

@@ -1,0 +1,6 @@
+grocy.svg is reproduced without changes from Homarr Labs Dashboard Icons:
+https://github.com/homarr-labs/dashboard-icons/blob/main/svg/grocy.svg
+
+Copyright (c) 2024 Bjorn Lammers, Meier Lukas, Thomas Camlong and Homarr Labs.
+Licensed under the Apache License, Version 2.0.
+The complete license is included in dashboard-icons-LICENSE.txt.

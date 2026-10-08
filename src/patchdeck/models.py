@@ -94,6 +94,12 @@ class SettingsPatch(BaseModel):
     registry_refresh_window_minutes: int | None = Field(default=None, ge=1, le=1440)
 
 
+class UpdateAllRequest(BaseModel):
+    """Dashboard candidates selected from the current status snapshot."""
+
+    service_ids: list[str] | None = Field(default=None, max_length=100)
+
+
 class ServiceStatus(BaseModel):
     service_id: str
     id: str | None = None

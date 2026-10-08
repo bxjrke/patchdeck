@@ -5,6 +5,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
+from .docker_import import icon_slug_for_service, preferred_icon_slug
 from .models import ServiceConfig
 
 ICON_SOURCES = (
@@ -23,15 +24,19 @@ ICON_ALIASES = {
 def cache_service_icon(service: ServiceConfig, data_dir: Path) -> ServiceConfig:
     if is_external_override(service.logo_url):
         return service
-    if not service.icon_slug:
+    detected_slug = icon_slug_for_service(service.name, service.image or "")
+    icon_slug = preferred_icon_slug(service, detected_slug)
+    if not icon_slug:
         return service.model_copy(update={"logo_url": None}) if is_local_icon(service.logo_url) else service
 
+    service = service.model_copy(update={"icon_slug": icon_slug})
+
     icon_dir = data_dir / "icons"
-    cached = cached_icon_for_slug(icon_dir, service.icon_slug)
+    cached = cached_icon_for_slug(icon_dir, icon_slug)
     if cached:
         return service.model_copy(update={"logo_url": LOCAL_ICON_PREFIX + quote(cached.name)})
 
-    downloaded = download_icon(icon_dir, service.icon_slug)
+    downloaded = download_icon(icon_dir, icon_slug)
     if downloaded:
         return service.model_copy(update={"logo_url": LOCAL_ICON_PREFIX + quote(downloaded.name)})
     return service

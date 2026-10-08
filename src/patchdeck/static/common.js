@@ -94,10 +94,20 @@ async function refreshAllServices() {
     const statuses = await response.json();
     document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
     if (typeof renderServiceCards === 'function') {
-      homeServiceOrder = statuses.map(service => service.service_id);
-      updateAllButton(statuses);
-      renderServiceCards(statuses);
-      refreshIcons();
+      let queue = typeof homeQueue === 'undefined' ? null : homeQueue;
+      try {
+        const queueResponse = await api('/api/update-queue');
+        if (queueResponse.ok) queue = await queueResponse.json();
+      } catch {
+        // Keep the last known queue state if the update endpoint is restarting.
+      }
+      if (typeof applyHomeSnapshot === 'function') {
+        applyHomeSnapshot(statuses, queue, true);
+      } else {
+        updateAllButton(statuses, queue);
+        renderServiceCards(statuses, queue);
+        refreshIcons();
+      }
     }
   } finally {
     if (badge) {
@@ -122,11 +132,21 @@ async function loadLanguagePreference(settings) {
 }
 
 function logoHtml(service) {
-  if (service.logo_url) {
-    return '<span class="logo service-icon"><img class="service-icon-image" src="' + esc(service.logo_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></span>';
+  const iconSlug = service.icon_slug ? encodeURIComponent(service.icon_slug) : '';
+  const iconUrl = service.logo_url || (iconSlug ? '/api/icons/lookup/' + iconSlug : '');
+  if (iconUrl) {
+    return '<span class="logo service-icon"><img class="service-icon-image" src="' + esc(iconUrl) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></span>';
   }
   return '<div class="logo placeholder" aria-hidden="true"><i data-lucide="package"></i></div>';
 }
+
+document.addEventListener('error', event => {
+  const image = event.target instanceof HTMLImageElement ? event.target : null;
+  if (!image || !image.classList.contains('service-icon-image')) return;
+  const wrapper = image.closest('.service-icon');
+  if (wrapper) wrapper.outerHTML = '<div class="logo placeholder" aria-hidden="true"><i data-lucide="package"></i></div>';
+  refreshIcons();
+}, true);
 
 function saveButton(action, labelKey = 'save') {
   const icon = labelKey === 'add' ? 'plus' : 'save';

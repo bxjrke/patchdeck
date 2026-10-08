@@ -69,3 +69,57 @@ def test_active_update_is_cleared_when_setup_audit_fails(tmp_path, monkeypatch) 
         engine.perform_update(service, "test")
 
     assert engine.active_update(service.id) is None
+
+
+def test_queue_snapshot_reports_live_phase_without_status_lookup(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    engine._queue_jobs = [{"id": "job-1", "service_id": "demo-service", "state": "running"}]
+    engine.mark_update_active("demo-service", True, phase="Pulling image", update_percentage=50)
+
+    def fail_status_lookup(*_args, **_kwargs):
+        raise AssertionError("queue polling must not contact Docker registries")
+
+    monkeypatch.setattr(engine, "statuses", fail_status_lookup)
+    snapshot = engine.queue_snapshot()
+
+    assert snapshot["active"]["phase"] == "Pulling image"
+    assert snapshot["active"]["update_percentage"] == 50
+
+
+def test_bulk_queue_uses_candidates_and_keeps_self_update_last(tmp_path, monkeypatch) -> None:
+    store = JsonStore(tmp_path)
+    engine = UpdateEngine(store)
+    for service_id in ("patchdeck", "grocy", "disabled"):
+        store.upsert_service(ServiceConfig(id=service_id, name=service_id, update_enabled=service_id != "disabled", update_policy="disabled"))
+    queued = []
+
+    def fail_status_lookup(*_args, **_kwargs):
+        raise AssertionError("enqueue must not recompute the dashboard status")
+
+    def capture_enqueue(service, source):
+        queued.append(service.id)
+        return {"id": service.id, "state": "queued"}, True
+
+    monkeypatch.setattr(engine, "statuses", fail_status_lookup)
+    monkeypatch.setattr(engine, "enqueue_update", capture_enqueue)
+    jobs = engine.enqueue_all_updates("web", ["patchdeck", "grocy", "grocy", "missing", "disabled"])
+
+    assert queued == ["grocy", "patchdeck"]
+    assert [job["id"] for job in jobs] == ["grocy", "patchdeck"]
+
+
+def test_queue_keeps_detached_self_update_active_until_helper_finishes(tmp_path, monkeypatch) -> None:
+    engine = UpdateEngine(JsonStore(tmp_path))
+    engine._queue_jobs = [{"id": "job-self", "service_id": "patchdeck", "state": "succeeded", "started_at": 100}]
+    engine.save_self_update_state({"service_id": "patchdeck", "started_at": 101, "in_progress": True})
+    monkeypatch.setattr(engine, "active_update", lambda _id: {"phase": "Recreating", "update_percentage": 90})
+
+    snapshot = engine.queue_snapshot()
+    assert snapshot["active"]["id"] == "job-self"
+    assert snapshot["active"]["state"] == "running"
+    assert snapshot["recent"] == []
+
+    engine.save_self_update_state({"started_at": 101, "in_progress": False, "ok": False, "finished_at": 110})
+    snapshot = engine.queue_snapshot()
+    assert snapshot["active"] is None
+    assert snapshot["recent"][0]["state"] == "failed"
