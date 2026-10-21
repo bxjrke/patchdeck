@@ -123,28 +123,39 @@ def page_html(active: str) -> str:
         raise ValueError(f"Unknown page: {active}")
     content = HOME_VIEW if active == "home" else SETTINGS_VIEW
     script_name = "home.js" if active == "home" else "settings.js"
+    nav_href, nav_icon, nav_key, nav_label = (
+        ("/settings", "settings", "settings", "Settings")
+        if active == "home"
+        else ("/", "arrow-left", "overview", "Overview")
+    )
     return f'''<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Patchdeck</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Your Docker Compose services, versions and manual updates in one place.">
+  <title>{"Settings · " if active == "settings" else ""}Patchdeck</title>
   <link rel="icon" type="image/png" sizes="32x32" href="{PATCHDECK_FAVICON_URL}">
   <link rel="icon" type="image/svg+xml" href="{PATCHDECK_SVG_FAVICON_URL}">
   <link rel="apple-touch-icon" sizes="180x180" href="{PATCHDECK_APPLE_ICON_URL}">
+  <script src="/static/theme.js?{STATIC_ASSET_VERSION}"></script>
   <link rel="stylesheet" href="/static/app.css?{STATIC_ASSET_VERSION}">
 </head>
 <body>
+  <a class="skip-link" href="#content" data-i18n="skipToContent">Skip to content</a>
   <main class="shell">
     <header class="topbar">
       <div class="brand">
         <p class="eyebrow" data-i18n="tagline">Homelab Update Control</p>
         <div class="brand-row">
           <a class="title-link" href="/" aria-label="Patchdeck home" data-i18n-aria-label="patchdeckHome"><h1>Patchdeck</h1></a>
-          <a class="settings-link icon-button" href="/settings" aria-label="Settings" title="Settings"><i data-lucide="settings" aria-hidden="true"></i><span data-i18n="settings">Settings</span></a>
+          <a class="settings-link icon-button" href="{nav_href}" data-i18n-aria-label="{nav_key}" aria-label="{nav_label}"><i data-lucide="{nav_icon}" aria-hidden="true"></i><span data-i18n="{nav_key}">{nav_label}</span></a>
         </div>
       </div>
-      <div class="summary" aria-label="Service overview actions" data-i18n-aria-label="serviceOverviewActions">
+      <div class="summary" aria-label="Service overview actions" data-i18n-aria-label="serviceOverviewActions" {"hidden" if active == "settings" else ""}>
         <span id="summary-services" class="summary-pill">0 services</span>
         <button type="button" id="update-all" class="badge badge-action update summary-action" data-action="run-all-updates" hidden><i data-lucide="list-restart" aria-hidden="true"></i><span></span></button>
         <button type="button" id="refresh-status" class="badge badge-action neutral summary-action" data-action="refresh-all-services" title="Refresh"><i data-lucide="refresh-cw" aria-hidden="true"></i><span data-i18n="refreshUpdates">Refresh</span></button>
@@ -152,7 +163,7 @@ def page_html(active: str) -> str:
       <div id="home-feedback" class="feedback" role="status" aria-live="polite" hidden></div>
     </header>
 
-    {content}
+    <div id="content" tabindex="-1">{content}</div>
 
     <footer class="footer"><span class="version" aria-label="Patchdeck version">Patchdeck {__version__}</span></footer>
   </main>
@@ -164,25 +175,25 @@ def page_html(active: str) -> str:
 
 HOME_VIEW = '''
     <section id="home-view">
-      <div id="services" class="stack notice">Loading services...</div>
+      <div id="services" class="stack notice" aria-busy="true" data-i18n="loadingServices">Loading services...</div>
     </section>
 '''
 
 
 SETTINGS_VIEW = '''
     <section id="settings-view">
+      <div class="page-intro"><h2 data-i18n="settings">Settings</h2><p data-i18n="settingsIntro">Manage your services and preferences. Changes are saved automatically.</p></div>
       <section class="card compact-card">
         <div class="card-head">
           <div class="identity">
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="sliders-horizontal"></i></div>
             <h2 data-i18n="settingsGeneral">General</h2>
           </div>
-          <span class="badge ok" data-i18n="global">Global</span>
         </div>
         <div class="grid settings-grid">
-          <label><span data-i18n="updateInterval">Update check interval</span><span class="input-suffix"><input id="update-interval" type="number" min="1"><span>min</span></span></label>
-          <label><span data-i18n="baseUrl">Base URL</span><input id="base-url" placeholder="https://patchdeck.example"></label>
-          <label><span data-i18n="language">Language</span><select id="language"><option value="en">English</option><option value="de">German</option></select></label>
+          <label><span data-i18n="updateInterval">Update check interval</span><span class="input-suffix"><input id="update-interval" type="number" min="1" max="10080" required inputmode="numeric"><span>min</span></span></label>
+          <label><span data-i18n="baseUrl">Base URL</span><input id="base-url" type="url" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="https://patchdeck.example"></label>
+          <label><span data-i18n="language">Language</span><select id="language"><option value="en">English</option><option value="de">Deutsch</option></select></label>
         </div>
         <div id="settings-save-status" class="autosave-status" role="status" aria-live="polite" hidden></div>
       </section>
@@ -193,13 +204,14 @@ SETTINGS_VIEW = '''
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="radio-tower"></i></div>
             <h2>MQTT</h2>
           </div>
-          <label class="toggle-row inline-toggle"><span id="mqtt-state-label" data-state-label="mqtt">Inactive</span><input id="mqtt-enabled" type="checkbox" role="switch"></label>
         </div>
+        <label class="toggle-row mqtt-toggle"><span id="mqtt-toggle-label" data-i18n="enableMqtt">Enable MQTT</span><span id="mqtt-state-label" aria-hidden="true">Inactive</span><input id="mqtt-enabled" type="checkbox" role="switch" aria-labelledby="mqtt-toggle-label" aria-describedby="mqtt-help"></label>
+        <p id="mqtt-help" class="section-help" data-i18n="mqttHelp">Publish service update status to Home Assistant through your MQTT broker.</p>
         <div id="mqtt-fields" class="grid settings-grid">
-          <label><span data-i18n="mqttHost">MQTT Host</span><input id="mqtt-host" placeholder="mosquitto"></label>
-          <label><span data-i18n="mqttPort">MQTT Port</span><input id="mqtt-port" type="number" min="1" max="65535"></label>
-          <label><span data-i18n="mqttUser">MQTT User</span><input id="mqtt-user"></label>
-          <label><span data-i18n="mqttPassword">MQTT password</span><input id="mqtt-password" type="password"></label>
+          <label><span data-i18n="mqttHost">MQTT Host</span><input id="mqtt-host" autocapitalize="none" spellcheck="false" placeholder="mosquitto"></label>
+          <label><span data-i18n="mqttPort">MQTT Port</span><input id="mqtt-port" type="number" min="1" max="65535" inputmode="numeric"></label>
+          <label><span data-i18n="mqttUser">MQTT User</span><input id="mqtt-user" autocapitalize="none" spellcheck="false" autocomplete="username"></label>
+          <label><span data-i18n="mqttPassword">MQTT password</span><input id="mqtt-password" type="password" autocomplete="new-password"></label>
           <label><span data-i18n="mqttPrefix">MQTT Discovery Prefix</span><input id="mqtt-prefix"></label>
           <label><span data-i18n="mqttTopic">MQTT Base Topic</span><input id="mqtt-topic"></label>
         </div>
@@ -223,8 +235,9 @@ SETTINGS_VIEW = '''
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="server"></i></div>
             <h2 data-i18n="services">Services</h2>
           </div>
-          <span class="badge warn" data-i18n="configuration">Configuration</span>
         </div>
+        <p class="section-help" data-i18n="serviceRemovalHelp">Removing a service only removes its Patchdeck configuration. The container keeps running.</p>
+        <div id="service-undo" class="undo-list" aria-live="polite"></div>
         <div id="service-settings" class="details-stack notice">Loading services...</div>
       </section>
 
@@ -234,11 +247,10 @@ SETTINGS_VIEW = '''
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="plus"></i></div>
             <h2 data-i18n="createService">Create service</h2>
           </div>
-          <span class="badge warn" data-i18n="manual">Manual</span>
         </div>
         <div class="grid settings-grid">
-          <label><span>ID</span><input id="service-id" placeholder="homeassistant"></label>
-          <label><span data-i18n="name">Display name</span><input id="service-name" placeholder="Home Assistant"></label>
+          <label><span>ID</span><input id="service-id" required pattern="[a-z0-9]([a-z0-9_]|-){1,63}" autocapitalize="none" spellcheck="false" placeholder="homeassistant"></label>
+          <label><span data-i18n="name">Display name</span><input id="service-name" required placeholder="Home Assistant"></label>
           <label class="toggle-row"><span data-i18n="manualUpdateAction">Show update action</span><input id="service-update-action" type="checkbox" role="switch"></label>
           <label><span data-i18n="container">Container name</span><input id="service-container" placeholder="homeassistant"></label>
           <label class="wide"><span data-i18n="iconPath">Icon path</span><input id="service-logo-url" placeholder="/data/icons/homeassistant.svg or https://example/icon.svg"></label>
@@ -254,7 +266,6 @@ SETTINGS_VIEW = '''
             <div class="logo placeholder" aria-hidden="true"><i data-lucide="container"></i></div>
             <h2 data-i18n="dockerImport">Docker Import</h2>
           </div>
-          <span class="badge ok" data-i18n="readOnly">Read-only</span>
         </div>
         <p data-i18n="dockerImportIntro">The scan is always available manually. Patchdeck only reads containers, images, and Compose labels, and creates a service only after you click Import.</p>
         <div class="actions compact"><button type="button" data-action="scan-docker"><i data-lucide="scan-line" aria-hidden="true"></i><span data-i18n="scanDocker">Scan Docker</span></button></div>

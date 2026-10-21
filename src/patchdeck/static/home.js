@@ -34,6 +34,7 @@ function applyHomeSnapshot(statuses, queue = homeQueue, preserveOrder = false) {
   document.querySelector('#summary-services').textContent = serviceCountText(homeStatuses.length);
   updateAllButton(homeStatuses, homeQueue);
   renderServiceCards(homeStatuses, homeQueue);
+  document.querySelector('#services').removeAttribute('aria-busy');
   refreshIcons();
 }
 
@@ -152,18 +153,22 @@ function updateProgressHtml(service, job, running, queued) {
   const label = running ? tr('updateRunning') : tr('updateQueued');
   const meta = percentage === null ? '' : '<strong>' + percentage + '%</strong>';
   const queueLabel = queued && job?.position ? ' · ' + tr('queuePosition') + ' ' + job.position : '';
-  const value = percentage === null || queued ? '' : ' value="' + percentage + '"';
+  if (queued) return '<div class="queue-notice" role="status">' + esc(label + queueLabel) + '</div>';
+  const phase = updatePhaseText(job?.phase || service.state);
+  const value = percentage === null ? '' : ' value="' + percentage + '"';
+  const progressLabel = (service.name || service.service_id) + ': ' + phase;
   return '<div class="update-progress" role="status">' +
-    '<div class="update-progress-label"><span>' + esc(label + queueLabel) + '</span>' + meta + '</div>' +
-    '<progress class="progress-track" max="100"' + value + ' aria-label="' + esc(label) + '"></progress>' +
+    '<div class="update-progress-label"><span>' + esc(phase) + '</span>' + meta + '</div>' +
+    '<progress class="progress-track" max="100"' + value + ' aria-label="' + esc(progressLabel) + '"></progress>' +
     '</div>';
 }
 
 function renderServiceCards(statuses, queue = homeQueue) {
   const target = document.querySelector('#services');
+  target.classList.remove('notice');
   const expanded = new Set([...target.querySelectorAll('.card details[open]')].map(node => node.closest('.card').dataset.service));
   if (!statuses.length) {
-    target.innerHTML = '<section class="card"><div class="notice">' + esc(tr('noServices')) + '</div></section>';
+    target.innerHTML = '<section class="card empty-state"><div class="logo placeholder" aria-hidden="true"><i data-lucide="package"></i></div><h2>' + esc(tr('noServices')) + '</h2><p>' + esc(tr('noServicesHelp')) + '</p><a class="settings-link" href="/settings">' + esc(tr('settings')) + '</a></section>';
     return;
   }
   target.innerHTML = statuses.map(service => {
@@ -178,26 +183,27 @@ function renderServiceCards(statuses, queue = homeQueue) {
       ? '<span class="spinner" aria-hidden="true"></span>'
       : (queued ? '<i data-lucide="list-restart" aria-hidden="true"></i>' : '<i data-lucide="' + (service.update_available ? 'download' : (incomplete ? 'circle-alert' : 'check')) + '" aria-hidden="true"></i>');
     const badgeContent = badgeIcon + '<span>' + esc(badgeLabel) + '</span>';
-    const badge = service.update_available && service.update_enabled && !busy
-      ? '<button type="button" class="badge badge-action ' + badgeClass + '" data-action="run-update" data-service-id="' + esc(service.service_id) + '">' + badgeContent + '</button>'
-      : '<span class="badge ' + badgeClass + '">' + badgeContent + '</span>';
+    const badge = '<span class="badge ' + badgeClass + '">' + badgeContent + '</span>';
+    const action = service.update_available && service.update_enabled && !busy
+      ? '<button type="button" class="install-update" aria-label="' + esc(tr('startUpdate') + ': ' + service.name) + '" data-action="run-update" data-service-id="' + esc(service.service_id) + '"><i data-lucide="download" aria-hidden="true"></i><span>' + esc(tr('installUpdate')) + '</span></button>'
+      : '';
     const availableVersion = versionHtml(service.latest_version || tr('notChecked'), service.release_notes_url);
     const lastRun = service.last_run
       ? '<div class="last-run"><span>' + esc(tr('lastUpdate')) + '</span><strong>' + esc(service.last_run.ok ? tr('success') : tr('error')) + ' · ' + esc(formatTs(service.last_run.ts)) + '</strong></div>'
       : '';
     const cardClass = ['card', running ? 'is-updating' : '', queued ? 'is-queued' : ''].filter(Boolean).join(' ');
-    const state = queued ? tr('updateQueued') : (running ? updatePhaseText(job?.phase || service.state) : service.state);
+    const state = queued ? tr('updateQueued') : (running ? updatePhaseText(job?.phase || service.state) : containerStateText(service.state));
     return '<section class="' + cardClass + '" data-service="' + esc(service.id || service.service_id) + '">' +
       '<div class="card-head service-card-head">' +
         '<div class="identity">' + logoHtml(service) + '<h2>' + esc(service.name) + '</h2></div>' +
-        badge +
+        '<div class="service-state">' + badge + action + '</div>' +
       '</div>' +
       updateProgressHtml(service, job, running, queued) +
-      '<div class="grid">' +
+      '<div class="grid service-metrics">' +
+        '<div class="version-metric"><span>' + esc(tr('installed')) + '</span><strong>' + esc(service.current_version || tr('notChecked')) + '</strong></div>' +
+        '<div class="version-metric"><span>' + esc(tr('available')) + '</span><strong>' + availableVersion + '</strong></div>' +
         '<div><span>' + esc(tr('container')) + '</span><strong>' + esc(service.container || '—') + '</strong></div>' +
         '<div><span>' + esc(tr('status')) + '</span><strong data-role="container-state">' + esc(state || '—') + '</strong></div>' +
-        '<div><span>' + esc(tr('installed')) + '</span><strong>' + esc(service.current_version || tr('notChecked')) + '</strong></div>' +
-        '<div><span>' + esc(tr('available')) + '</span><strong>' + availableVersion + '</strong></div>' +
       '</div>' +
       '<details><summary>' + esc(tr('image')) + '</summary><code>' + esc(service.image || '—') + '</code></details>' +
       lastRun +
@@ -206,6 +212,11 @@ function renderServiceCards(statuses, queue = homeQueue) {
   target.querySelectorAll('.card').forEach(card => {
     if (expanded.has(card.dataset.service)) card.querySelector('details').open = true;
   });
+}
+
+function containerStateText(state) {
+  const keys = {running: 'containerRunning', exited: 'containerStopped', stopped: 'containerStopped', restarting: 'containerRestarting', paused: 'containerPaused', unknown: 'containerUnknown'};
+  return keys[state] ? tr(keys[state]) : state;
 }
 
 function updatePhaseText(phase) {
@@ -237,7 +248,7 @@ async function runUpdate(id) {
   homeSubmitting = true;
   updateAllButton(homeStatuses, homeQueue);
   const card = document.querySelector('.card[data-service="' + CSS.escape(id) + '"]');
-  const badge = card?.querySelector('.badge-action');
+  const badge = card?.querySelector('.install-update');
   const state = card?.querySelector('[data-role="container-state"]');
   if (badge) {
     badge.disabled = true;
@@ -349,6 +360,8 @@ async function pollHomeQueue() {
 }
 
 loadHome().then(() => setTimeout(pollHomeQueue, 1500)).catch(error => {
+  document.querySelector('#services').removeAttribute('aria-busy');
+  document.querySelector('#services').textContent = tr('statusLoadFailed');
   showHomeFeedback(tr('statusLoadFailed'));
   console.error('Patchdeck status failed', error);
   setTimeout(pollHomeQueue, 1500);

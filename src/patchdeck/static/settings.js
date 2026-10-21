@@ -3,6 +3,9 @@ let settingsSaveTimer = null;
 let settingsSaveVersion = 0;
 let settingsSaveField = null;
 let mqttPasswordDirty = false;
+const serviceSaveRequests = new Map();
+const removingServices = new Set();
+const deletedServices = new Map();
 
 async function loadSettingsPage() {
   await loadSettings();
@@ -45,6 +48,7 @@ function wireAutosaveSettings() {
     applyI18n();
     updateMqttVisibility();
     renderSaveButtons();
+    renderDeletedServices();
     loadServiceSettings();
     saveSettingsSoon(0, event.target);
   });
@@ -76,8 +80,44 @@ function saveSettingsSoon(delay = 500, field = null) {
   clearTimeout(settingsSaveTimer);
   settingsSaveField = field || settingsSaveField;
   const version = ++settingsSaveVersion;
+  if (!validateFields(document.querySelectorAll('#update-interval, #base-url, #mqtt-port'))) {
+    showSaveStatus(document.querySelector('#settings-save-status'), 'invalid');
+    return;
+  }
   showSaveStatus(document.querySelector('#settings-save-status'), 'saving');
   settingsSaveTimer = setTimeout(() => saveSettings(version), delay);
+}
+
+function validateFields(fields, focus = false) {
+  let firstInvalid = null;
+  for (const field of fields) {
+    field.setCustomValidity(field.required && !field.value.trim() ? tr('fieldRequired') : '');
+    const valid = field.checkValidity();
+    const errorId = field.id + '-error';
+    let error = document.getElementById(errorId);
+    field.setAttribute('aria-invalid', String(!valid));
+    if (!valid) {
+      firstInvalid ||= field;
+      if (!error) {
+        error = document.createElement('small');
+        error.id = errorId;
+        error.className = 'field-error';
+        field.closest('label').appendChild(error);
+      }
+      const state = field.validity;
+      error.textContent = state.rangeUnderflow || state.rangeOverflow
+        ? tr('fieldRange').replace('{min}', field.min).replace('{max}', field.max)
+        : (state.typeMismatch ? tr('fieldUrl') : (state.patternMismatch ? tr('serviceIdHelp') : field.validationMessage));
+      error.hidden = false;
+      const descriptions = new Set((field.getAttribute('aria-describedby') || '').split(' ').filter(Boolean));
+      descriptions.add(errorId);
+      field.setAttribute('aria-describedby', [...descriptions].join(' '));
+    } else if (error) {
+      error.hidden = true;
+    }
+  }
+  if (focus && firstInvalid) firstInvalid.focus();
+  return !firstInvalid;
 }
 
 function readSettingsPayload() {
@@ -116,10 +156,13 @@ function showSaveStatus(target, state, field = null) {
     target.innerHTML = '<span>' + esc(tr('saveFailed')) + '</span><button type="button" class="secondary" data-action="retry-save">' + esc(tr('retry')) + '</button>';
     return;
   }
+  if (state === 'invalid') {
+    target.textContent = tr('checkFields');
+    return;
+  }
   if (state === 'saved') {
-    target.innerHTML = '<span class="sr-only">' + esc(tr('changesSaved')) + '</span>';
+    target.textContent = tr('changesSaved');
     showSaveFeedback(field);
-    target.saveStatusTimer = setTimeout(() => { target.hidden = true; }, 1900);
     return;
   }
   target.textContent = tr('saving');
@@ -155,6 +198,7 @@ async function loadServiceSettings() {
     target.textContent = tr('noServices');
     return;
   }
+  target.classList.remove('notice');
   target.innerHTML = services.map(service => serviceDetails(service)).join('');
   wireServiceAutosave();
   refreshIcons();
@@ -165,13 +209,13 @@ function serviceDetails(service) {
     '<div class="service-summary">' +
       '<div class="identity">' + logoHtml(service) + '<span class="summary-title"><strong>' + esc(service.name) + '</strong><span>' + esc(service.id) + '</span></span></div>' +
       '<div class="service-actions">' +
-        '<button type="button" class="secondary icon-only service-settings-toggle" data-i18n-title="edit" title="' + esc(tr('edit')) + '" aria-expanded="false" data-action="toggle-service-settings" data-service-id="' + esc(service.id) + '"><i data-lucide="settings" aria-hidden="true"></i></button>' +
-        '<button type="button" class="danger icon-only" data-i18n-title="delete" title="' + esc(tr('delete')) + '" data-action="delete-service" data-service-id="' + esc(service.id) + '" ' + (service.id === 'patchdeck' ? 'disabled aria-disabled="true"' : '') + '><i data-lucide="trash-2" aria-hidden="true"></i></button>' +
+        '<button type="button" class="secondary icon-only service-settings-toggle" title="' + esc(tr('edit')) + '" aria-label="' + esc(tr('edit') + ': ' + service.name) + '" aria-controls="details-' + esc(service.id) + '" aria-expanded="false" data-action="toggle-service-settings" data-service-id="' + esc(service.id) + '"><i data-lucide="settings" aria-hidden="true"></i></button>' +
+        '<button type="button" class="danger icon-only" title="' + esc(tr('delete')) + '" aria-label="' + esc(tr('delete') + ': ' + service.name) + '" data-action="delete-service" data-service-id="' + esc(service.id) + '" ' + (service.id === 'patchdeck' ? 'disabled aria-disabled="true"' : '') + '><i data-lucide="trash-2" aria-hidden="true"></i></button>' +
       '</div>' +
     '</div>' +
-    '<div class="details-body" hidden>' +
+    '<div class="details-body" id="details-' + esc(service.id) + '" hidden>' +
       '<div class="grid settings-grid">' +
-        '<label><span>' + esc(tr('name')) + '</span><input id="edit-name-' + esc(service.id) + '" value="' + esc(service.name) + '"></label>' +
+        '<label><span>' + esc(tr('name')) + '</span><input id="edit-name-' + esc(service.id) + '" required value="' + esc(service.name) + '"></label>' +
         '<label class="toggle-row"><span>' + esc(tr('updateAllowed')) + '</span><input id="edit-update-action-' + esc(service.id) + '" type="checkbox" role="switch" ' + checked(Boolean(service.update_enabled)) + '></label>' +
         '<label><span>' + esc(tr('container')) + '</span><input id="edit-container-' + esc(service.id) + '" value="' + esc(service.container || '') + '"></label>' +
         '<label class="wide"><span>' + esc(tr('iconPath')) + '</span><input id="edit-logo-url-' + esc(service.id) + '" value="' + esc(service.logo_url || '') + '"></label>' +
@@ -228,8 +272,7 @@ function readServicePayload(id, prefix, existingId) {
     compose_project_dir: section?.dataset.composeProjectDir || '',
     compose_service: section?.dataset.composeService || '',
     logo_url: document.querySelector(prefix + 'logo-url-' + id)?.value.trim() || '',
-    release_notes: document.querySelector(prefix + 'release-notes-' + id)?.value.trim() || '',
-    metadata: {}
+    release_notes: document.querySelector(prefix + 'release-notes-' + id)?.value.trim() || ''
   };
 }
 
@@ -266,15 +309,32 @@ function wireServiceAutosave() {
 }
 
 function saveExistingServiceSoon(id, delay = 500, field = null) {
+  if (removingServices.has(id)) return;
   clearTimeout(serviceSaveTimers[id]);
   serviceSaveFields[id] = field || serviceSaveFields[id];
   const version = (serviceSaveVersions[id] || 0) + 1;
   serviceSaveVersions[id] = version;
+  const section = document.querySelector('[data-service-config="' + CSS.escape(id) + '"]');
+  if (!validateFields(section.querySelectorAll('input:not([type="checkbox"])'))) {
+    showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'invalid');
+    return;
+  }
   showSaveStatus(document.querySelector('[data-service-save-status="' + CSS.escape(id) + '"]'), 'saving');
   serviceSaveTimers[id] = setTimeout(() => saveExistingService(id, version), delay);
 }
 
 async function saveExistingService(id, version = serviceSaveVersions[id]) {
+  const previous = serviceSaveRequests.get(id) || Promise.resolve();
+  const request = previous.catch(() => {}).then(() => performServiceSave(id, version));
+  serviceSaveRequests.set(id, request);
+  try {
+    await request;
+  } finally {
+    if (serviceSaveRequests.get(id) === request) serviceSaveRequests.delete(id);
+  }
+}
+
+async function performServiceSave(id, version) {
   try {
     const payload = readServicePayload(id, '#edit-', id);
     const response = await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
@@ -295,6 +355,7 @@ async function saveExistingService(id, version = serviceSaveVersions[id]) {
 }
 
 async function createService() {
+  if (!validateFields(document.querySelectorAll('#service-id, #service-name'), true)) return;
   const id = document.querySelector('#service-id').value.trim();
   const payload = {
     id,
@@ -308,18 +369,74 @@ async function createService() {
     logo_url: document.querySelector('#service-logo-url').value.trim(),
     metadata: {}
   };
-  await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
+  const response = await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(payload)});
+  if (!response.ok) throw new Error('Could not create service');
   await loadServiceSettings();
 }
 
 async function refreshService(id) {
-  await api('/api/services/' + encodeURIComponent(id) + '/refresh', {method: 'POST', body: '{}'});
+  const response = await api('/api/services/' + encodeURIComponent(id) + '/refresh', {method: 'POST', body: '{}'});
+  if (!response.ok) throw new Error('Could not refresh service');
   await loadServiceSettings();
 }
 
 async function deleteService(id) {
-  await api('/api/services/' + encodeURIComponent(id), {method: 'DELETE'});
-  await loadServiceSettings();
+  if (removingServices.has(id)) return;
+  removingServices.add(id);
+  clearTimeout(serviceSaveTimers[id]);
+  try {
+    // A pending autosave must finish before DELETE, or it could recreate the service.
+    await serviceSaveRequests.get(id);
+    const snapshotResponse = await api('/api/services');
+    if (!snapshotResponse.ok) throw new Error('Could not read service configuration');
+    const snapshot = (await snapshotResponse.json()).find(service => service.id === id);
+    if (!snapshot) throw new Error('Service no longer exists');
+    const response = await api('/api/services/' + encodeURIComponent(id), {method: 'DELETE'});
+    if (!response.ok) throw new Error('Could not delete service');
+    deletedServices.set(id, snapshot);
+    renderDeletedServices();
+    await loadServiceSettings();
+    document.querySelector('[data-action="undo-delete-service"][data-service-id="' + CSS.escape(id) + '"]').focus();
+  } finally {
+    removingServices.delete(id);
+  }
+}
+
+function renderDeletedServices() {
+  document.querySelector('#service-undo').innerHTML = [...deletedServices.values()].map(service =>
+    '<div class="undo-notice"><p>' + esc(service.name + ' · ' + tr('serviceRemoved')) + '</p>' +
+    '<button type="button" class="secondary" data-action="undo-delete-service" data-service-id="' + esc(service.id) + '" aria-label="' + esc(tr('undo') + ': ' + service.name) + '">' + esc(tr('undo')) + '</button><p class="field-error" data-undo-error hidden></p></div>'
+  ).join('');
+}
+
+async function undoDeleteService(id) {
+  const snapshot = deletedServices.get(id);
+  if (!snapshot) return;
+  const button = document.querySelector('[data-action="undo-delete-service"][data-service-id="' + CSS.escape(id) + '"]');
+  const feedback = button.closest('.undo-notice').querySelector('[data-undo-error]');
+  button.disabled = true;
+  feedback.hidden = true;
+  try {
+    const currentResponse = await api('/api/services');
+    if (!currentResponse.ok) throw new Error('Could not read services');
+    if ((await currentResponse.json()).some(service => service.id === id)) {
+      feedback.textContent = tr('undoConflict');
+      feedback.hidden = false;
+      return;
+    }
+    const response = await api('/api/services/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(snapshot)});
+    if (!response.ok) throw new Error('Could not restore service');
+    deletedServices.delete(id);
+    await loadServiceSettings();
+    renderDeletedServices();
+    document.querySelector('[data-action="toggle-service-settings"][data-service-id="' + CSS.escape(id) + '"]').focus();
+  } catch (error) {
+    feedback.textContent = tr('undoFailed');
+    feedback.hidden = false;
+    console.error('Patchdeck undo failed', error);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadDockerCandidates() {
@@ -347,8 +464,12 @@ async function loadDockerCandidates() {
 }
 
 async function importCandidate(id) {
-  await api('/api/import/docker/' + encodeURIComponent(id), {method: 'POST'});
+  const response = await api('/api/import/docker/' + encodeURIComponent(id), {method: 'POST'});
+  if (!response.ok) throw new Error('Could not import service');
   await Promise.all([loadServiceSettings(), loadDockerCandidates()]);
 }
 
-loadSettingsPage();
+loadSettingsPage().catch(error => {
+  showActionFeedback(tr('statusLoadFailed'));
+  console.error('Patchdeck settings failed', error);
+});

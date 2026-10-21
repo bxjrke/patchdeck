@@ -10,7 +10,7 @@ The image contains:
 
 - Patchdeck and its Python runtime dependencies
 - Docker CLI
-- Docker Compose v2 plugin
+- Docker Compose plugin
 - A `/healthz` healthcheck
 - `/data` as the default persistent data directory
 
@@ -19,7 +19,7 @@ The image contains:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.6.1
+    image: ghcr.io/bxjrke/patchdeck:0.6.2
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -92,7 +92,7 @@ If the new container fails its health check or the UI does not behave as expecte
 
 The release workflow publishes:
 
-- `ghcr.io/bxjrke/patchdeck:0.6.1` for version tags like `v0.6.1`
+- `ghcr.io/bxjrke/patchdeck:0.6.2` for version tags like `v0.6.2`
 - `ghcr.io/bxjrke/patchdeck:0.6` for the matching minor line
 - `ghcr.io/bxjrke/patchdeck:main` for pushes to `main`
 - `ghcr.io/bxjrke/patchdeck:sha-...` for immutable commit images

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from patchdeck import __version__, docker_import, icon_cache, main, update_engine
 from patchdeck import api as api_module
+from patchdeck.assets import STATIC_ASSET_VERSION
 from patchdeck.docker_import import icon_slug_for_service, preferred_icon_slug
 from patchdeck.main import app
 from patchdeck.models import ServiceConfig, ServiceStatus, Settings
@@ -91,9 +92,9 @@ def test_html_pages() -> None:
     assert 'data-i18n="footer"' not in settings_source
     assert 'aria-label="Patchdeck version"' in settings_source
     assert f"Patchdeck {__version__}" in settings_source
-    assert f'/static/favicon.png?v{__version__}-logo4' in home_source
-    assert f'/static/favicon.svg?v{__version__}-logo4' in home_source
-    assert f'/static/apple-touch-icon.png?v{__version__}-logo4' in home_source
+    assert f'/static/favicon.png?{STATIC_ASSET_VERSION}' in home_source
+    assert f'/static/favicon.svg?{STATIC_ASSET_VERSION}' in home_source
+    assert f'/static/apple-touch-icon.png?{STATIC_ASSET_VERSION}' in home_source
     assert '<img class="brand-logo"' not in home_source
     assert 'data-i18n="settings">Settings</span>' in home_source
     assert 'id="summary-state"' not in home_source
@@ -305,7 +306,7 @@ def test_self_service_is_created_from_current_container(tmp_path, monkeypatch) -
     service = test_store.get_service("patchdeck")
     assert service is not None
     assert service.name == "Patchdeck"
-    assert service.logo_url == f"/static/patchdeck.svg?v{__version__}-logo4"
+    assert service.logo_url == f"/static/patchdeck.svg?{STATIC_ASSET_VERSION}"
     assert service.icon_slug is None
     assert service.update_enabled is True
     assert service.update_policy == "manual"

@@ -45,7 +45,7 @@ function applyI18n() {
 }
 
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme || 'system';
+  window.PatchdeckTheme.apply(theme);
 }
 
 function refreshIcons() {
@@ -82,6 +82,7 @@ async function getServices() {
 }
 
 async function refreshAllServices() {
+  showActionFeedback('');
   const badge = document.querySelector('#refresh-status');
   if (badge) {
     badge.disabled = true;
@@ -91,6 +92,7 @@ async function refreshAllServices() {
   }
   try {
     const response = await api('/api/status?refresh=true');
+    if (!response.ok) throw new Error('Could not refresh service status');
     const statuses = await response.json();
     document.querySelector('#summary-services').textContent = serviceCountText(statuses.length);
     if (typeof renderServiceCards === 'function') {
@@ -109,6 +111,9 @@ async function refreshAllServices() {
         refreshIcons();
       }
     }
+  } catch (error) {
+    showActionFeedback(tr('statusLoadFailed'));
+    console.error('Patchdeck refresh failed', error);
   } finally {
     if (badge) {
       badge.disabled = false;
@@ -117,6 +122,13 @@ async function refreshAllServices() {
       refreshIcons();
     }
   }
+}
+
+function showActionFeedback(message) {
+  const feedback = document.querySelector('#home-feedback');
+  feedback.hidden = !message;
+  feedback.dataset.state = 'error';
+  feedback.textContent = message;
 }
 
 async function loadLanguagePreference(settings) {
@@ -163,6 +175,7 @@ async function dispatchAction(target) {
     case 'retry-save': retrySave(target.closest('.autosave-status')); break;
     case 'toggle-service-settings': toggleServiceSettings(serviceId); break;
     case 'delete-service': await deleteService(serviceId); break;
+    case 'undo-delete-service': await undoDeleteService(serviceId); break;
     case 'refresh-service': await refreshService(serviceId); break;
     case 'preview-release-notes': previewReleaseNotes(target.dataset.selector || ''); break;
     case 'scan-docker': await loadDockerCandidates(); break;
@@ -174,5 +187,8 @@ async function dispatchAction(target) {
 document.addEventListener('click', event => {
   const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
   if (!target || target.matches(':disabled')) return;
-  dispatchAction(target).catch(error => console.error('Patchdeck action failed', error));
+  dispatchAction(target).catch(error => {
+    showActionFeedback(tr('actionFailed'));
+    console.error('Patchdeck action failed', error);
+  });
 });

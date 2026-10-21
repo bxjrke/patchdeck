@@ -20,7 +20,7 @@ Create a Compose file:
 ```yaml
 services:
   patchdeck:
-    image: ghcr.io/bxjrke/patchdeck:0.6.1
+    image: ghcr.io/bxjrke/patchdeck:0.6.2
     container_name: patchdeck
     restart: unless-stopped
     ports:
@@ -160,6 +160,8 @@ uv run --no-sync pytest -q
 uv run --no-sync ruff check src tests
 uv run --no-sync mypy src/patchdeck
 ```
+
+Optional browser regression checks and the HIG review are documented in [the UI review](docs/UI_REVIEW.md).
 
 The test bootstrap always redirects `PATCHDECK_DATA_DIR` to a temporary directory. Running the suite therefore cannot modify the checked-out `data/` directory.
 

@@ -2,6 +2,9 @@
 
 Patchdeck publishes container images to GitHub Container Registry through `.github/workflows/container.yml`.
 
+The `0.6.2` UI changes and validation are documented in
+[the release notes](releases/0.6.2.md) and [the UI review](UI_REVIEW.md). A local build does not publish a release.
+
 ## One-time GitHub Setup
 
 1. Push the repository to GitHub.
@@ -28,12 +31,16 @@ uv sync --locked --extra dev
 uv run --no-sync pytest -q
 uv run --no-sync ruff check src tests
 uv run --no-sync mypy src/patchdeck
+node --check src/patchdeck/static/theme.js
+node --check src/patchdeck/static/common.js
+node --check src/patchdeck/static/home.js
+node --check src/patchdeck/static/settings.js
 ```
 
 5. Build the image locally with the release version as its OCI label:
 
 ```bash
-docker build --build-arg PATCHDECK_VERSION=0.6.1 -t patchdeck:test .
+docker build --build-arg PATCHDECK_VERSION=0.6.2 -t patchdeck:test .
 ```
 
 6. Check Docker Compose inside the image:
@@ -54,16 +61,20 @@ docker run --rm patchdeck:test python -c "from importlib.resources import files;
 docker image inspect patchdeck:test --format '{{ index .Config.Labels "org.opencontainers.image.version" }}'
 ```
 
-9. Commit the release changes.
+9. Run the demo and review both pages in light and dark mode. Check a real phone
+   with its keyboard open and in landscape; emulation does not verify Safari input
+   zoom, safe areas, browser chrome, or touch feedback. Record any device checks
+   that remain open in the release notes. See the UI review for browser checks.
+   Commit the release changes.
 10. Create and push a SemVer tag prefixed with `v`:
 
 ```bash
-git tag v0.6.1
+git tag v0.6.2
 git push origin main
-git push origin v0.6.1
+git push origin v0.6.2
 ```
 
-The tag push publishes `ghcr.io/bxjrke/patchdeck:0.6.1` and `ghcr.io/bxjrke/patchdeck:0.6`.
+The tag push publishes `ghcr.io/bxjrke/patchdeck:0.6.2` and `ghcr.io/bxjrke/patchdeck:0.6`.
 
 ## Workflow Behavior
 
