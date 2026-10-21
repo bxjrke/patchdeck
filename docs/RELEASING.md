@@ -2,8 +2,8 @@
 
 Patchdeck publishes container images to GitHub Container Registry through `.github/workflows/container.yml`.
 
-The `0.6.2` UI changes and validation are documented in
-[the release notes](releases/0.6.2.md) and [the UI review](UI_REVIEW.md). A local build does not publish a release.
+The `0.6.3` browser-cache fix is documented in
+[the release notes](releases/0.6.3.md) and [the UI review](UI_REVIEW.md). A local build does not publish a release.
 
 ## One-time GitHub Setup
 
@@ -40,7 +40,7 @@ node --check src/patchdeck/static/settings.js
 5. Build the image locally with the release version as its OCI label:
 
 ```bash
-docker build --build-arg PATCHDECK_VERSION=0.6.2 -t patchdeck:test .
+docker build --build-arg PATCHDECK_VERSION=0.6.3 -t patchdeck:test .
 ```
 
 6. Check Docker Compose inside the image:
@@ -69,12 +69,12 @@ docker image inspect patchdeck:test --format '{{ index .Config.Labels "org.openc
 10. Create and push a SemVer tag prefixed with `v`:
 
 ```bash
-git tag v0.6.2
+git tag v0.6.3
 git push origin main
-git push origin v0.6.2
+git push origin v0.6.3
 ```
 
-The tag push publishes `ghcr.io/bxjrke/patchdeck:0.6.2` and `ghcr.io/bxjrke/patchdeck:0.6`.
+The tag push publishes `ghcr.io/bxjrke/patchdeck:0.6.3` and `ghcr.io/bxjrke/patchdeck:0.6`.
 
 ## Workflow Behavior
 

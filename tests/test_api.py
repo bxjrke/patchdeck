@@ -127,7 +127,7 @@ def test_html_pages() -> None:
     assert "onclick=" not in settings_source + home_source
     assert "unpkg.com" not in settings_source + home_source
     assert "X-Patchdeck-Request" in common_response.text
-    assert "/static/icons.svg#" in common_response.text
+    assert "/static/icons.svg" in common_response.text
     assert "mqtt_password" not in settings_js_response.text.split("if (mqttPasswordDirty)")[0].split("function readSettingsPayload()")[-1]
 
 

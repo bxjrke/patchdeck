@@ -8,12 +8,14 @@ const api = (path, options = {}) => fetch(path, {
 });
 const text = value => String(value ?? '');
 const esc = value => text(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const staticAssetVersion = document.documentElement.dataset.assetVersion;
+const staticAssetUrl = path => path + '?' + encodeURIComponent(staticAssetVersion);
 let currentLanguage = 'en';
 const I18N = {};
 
 async function loadTranslations(language) {
   if (I18N[language]) return;
-  const response = await fetch('/static/i18n/' + encodeURIComponent(language) + '.json');
+  const response = await fetch(staticAssetUrl('/static/i18n/' + encodeURIComponent(language) + '.json'), {cache: 'no-cache'});
   if (!response.ok) throw new Error('Translation file not found: ' + language);
   I18N[language] = await response.json();
 }
@@ -33,15 +35,15 @@ async function selectLanguage(language) {
   currentLanguage = 'en';
 }
 
-function tr(key) {
-  return (I18N[currentLanguage] && I18N[currentLanguage][key]) || (I18N.en && I18N.en[key]) || key;
+function tr(key, fallback = key) {
+  return (I18N[currentLanguage] && I18N[currentLanguage][key]) || (I18N.en && I18N.en[key]) || fallback;
 }
 
 function applyI18n() {
   document.documentElement.lang = currentLanguage;
-  document.querySelectorAll('[data-i18n]').forEach(node => node.textContent = tr(node.dataset.i18n));
-  document.querySelectorAll('[data-i18n-title]').forEach(node => node.title = tr(node.dataset.i18nTitle));
-  document.querySelectorAll('[data-i18n-aria-label]').forEach(node => node.setAttribute('aria-label', tr(node.dataset.i18nAriaLabel)));
+  document.querySelectorAll('[data-i18n]').forEach(node => node.textContent = tr(node.dataset.i18n, node.textContent));
+  document.querySelectorAll('[data-i18n-title]').forEach(node => node.title = tr(node.dataset.i18nTitle, node.title));
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(node => node.setAttribute('aria-label', tr(node.dataset.i18nAriaLabel, node.getAttribute('aria-label'))));
 }
 
 function applyTheme(theme) {
@@ -65,7 +67,7 @@ function refreshIcons() {
     svg.setAttribute('focusable', 'false');
     if (icon.getAttribute('aria-hidden')) svg.setAttribute('aria-hidden', 'true');
     const use = document.createElementNS(namespace, 'use');
-    use.setAttribute('href', '/static/icons.svg#' + name);
+    use.setAttribute('href', staticAssetUrl('/static/icons.svg') + '#' + name);
     svg.appendChild(use);
     icon.replaceWith(svg);
   });

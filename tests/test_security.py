@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from patchdeck import main
+from patchdeck.assets import STATIC_ASSET_VERSION
 from patchdeck.models import ServiceConfig, Settings
 
 WRITE_HEADERS = {"X-Patchdeck-Request": "1"}
@@ -67,6 +68,27 @@ def test_settings_secret_is_write_only_and_partial_updates_preserve_fields() -> 
     assert persisted.registry_refresh_hour == 7
     assert persisted.theme == "dark"
     assert persisted.update_interval_minutes == 15
+
+
+def test_pages_cannot_reuse_old_asset_references() -> None:
+    browser = TestClient(main.app)
+    for route in ("/", "/settings"):
+        response = browser.get(route)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert f'data-asset-version="{STATIC_ASSET_VERSION}"' in response.text
+
+
+def test_static_assets_revalidate_cached_copies() -> None:
+    browser = TestClient(main.app)
+    for path in ("/static/icons.svg", "/static/i18n/en.json", "/static/i18n/de.json", "/static/app.css"):
+        url = f"{path}?{STATIC_ASSET_VERSION}"
+        response = browser.get(url)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+        cached = browser.get(url, headers={"If-None-Match": response.headers["etag"]})
+        assert cached.status_code == 304
+        assert cached.headers["cache-control"] == "no-cache"
 
 
 def test_partial_service_put_preserves_server_managed_fields() -> None:

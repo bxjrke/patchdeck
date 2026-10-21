@@ -68,3 +68,24 @@ Physical iPhone/Android testing is still open: keyboard and input focus, browser
 chrome expansion, portrait/landscape safe areas, long-press behavior, pinch zoom,
 and touch feel. VoiceOver/Switch Control and real-world lighting checks also
 remain manual. Browser emulation and Axe do not replace them.
+
+## Upgrade-cache follow-up — 0.6.3
+
+The original fresh-profile checks did not cover a browser retaining older language
+and SVG files across an app upgrade. This was reproduced after a user reported
+raw translation keys and a missing back arrow. `scripts/check-asset-cache.cjs`
+primes real HTTP cache entries with legacy assets before loading the updated page;
+it verifies translated labels, the rendered SVG arrow, and the MQTT control.
+The regression passes in Chromium and WebKit after versioning all dependent UI
+assets and adding explicit cache headers.
+
+Against the disposable fixture, run:
+
+```bash
+NODE_PATH=/tmp/patchdeck-ui-tools/node_modules node scripts/check-asset-cache.cjs http://127.0.0.1:8767
+PATCHDECK_BROWSER=webkit NODE_PATH=/tmp/patchdeck-ui-tools/node_modules node scripts/check-asset-cache.cjs http://127.0.0.1:8767
+```
+
+The WebKit check requires a matching Playwright WebKit browser and its platform
+libraries, or the official matching Playwright container. These engine checks do
+not replace the remaining physical-iPhone checks listed above.

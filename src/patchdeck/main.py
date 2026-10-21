@@ -73,7 +73,10 @@ def create_app(
                 ),
                 no_store=True,
             )
-        return add_security_headers(await call_next(request), no_store=is_api_request)
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return add_security_headers(response, no_store=is_api_request)
 
     @application.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -92,6 +95,7 @@ def create_app(
 
 def page_response(active: str) -> HTMLResponse:
     response = HTMLResponse(page_html(active))
+    response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self'; "
@@ -129,7 +133,7 @@ def page_html(active: str) -> str:
         else ("/", "arrow-left", "overview", "Overview")
     )
     return f'''<!doctype html>
-<html lang="en" data-theme="system">
+<html lang="en" data-theme="system" data-asset-version="{STATIC_ASSET_VERSION}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
